@@ -1,0 +1,14 @@
+{
+  "name": "portfolio",
+  "private": true,
+  "scripts": {
+    "install:all": "npm ci --prefix apps/web && npm ci --prefix apps/api",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev --prefix apps/api\" \"npm run dev --prefix apps/web\"",
+    "test": "npm test --prefix apps/api",
+    "lint": "npm run lint --prefix apps/web",
+    "build": "npm run build --prefix apps/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
