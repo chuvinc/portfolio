@@ -51,7 +51,7 @@ jobs:
         run: |
           echo "version=$(jq -r .version apps/${{ matrix.app }}/package.json)+build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: apps/${{ matrix.app }}
           push: ${{ env.PUSH == 'true' }}
