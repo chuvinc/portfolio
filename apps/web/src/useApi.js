@@ -6,7 +6,7 @@ export function useApi(path) {
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch(path, { signal: controller.signal })
+    fetch(`${import.meta.env.BASE_URL}${path}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
         return res.json()

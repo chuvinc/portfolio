@@ -13,7 +13,7 @@ export function buildInfo(env = process.env) {
 export function buildApp(opts = {}) {
   const app = Fastify(opts)
 
-  app.get('/healthz', async () => ({ status: 'ok' }))
+  app.get('/healthcheck', async () => ({ status: 'ok' }))
   app.get('/api/projects', async () => projects)
   app.get('/api/build-info', async () => buildInfo())
 

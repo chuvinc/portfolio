@@ -11,7 +11,7 @@ const SKILLS = [
 ]
 
 function Projects() {
-  const { data, error } = useApi('/api/projects')
+  const { data, error } = useApi('api/projects')
 
   if (error) return <p className="status">Couldn't load projects: {error.message}</p>
   if (!data) return <p className="status">Loading projects…</p>
@@ -38,7 +38,7 @@ function Projects() {
 }
 
 function BuildInfo() {
-  const { data, error } = useApi('/api/build-info')
+  const { data, error } = useApi('api/build-info')
 
   if (error) return <span>build info unavailable</span>
   if (!data) return <span>…</span>

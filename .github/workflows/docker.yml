@@ -46,6 +46,11 @@ jobs:
           tags: |
             type=sha
             type=raw,value=latest
+      - id: build
+        name: Compute build metadata
+        run: |
+          echo "version=$(jq -r .version apps/${{ matrix.app }}/package.json)+build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: apps/${{ matrix.app }}
@@ -54,8 +59,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            GIT_SHA=${{ github.sha }}
-            BUILD_TIME=${{ github.event.head_commit.timestamp || github.event.pull_request.updated_at }}
+            APP_VERSION=${{ steps.build.outputs.version }}
+            GIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_TIME=${{ steps.build.outputs.time }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Scan image

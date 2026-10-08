@@ -2,9 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildApp, buildInfo } from '../src/app.js'
 
-test('GET /healthz returns ok', async () => {
+test('GET /healthcheck returns ok', async () => {
   const app = buildApp()
-  const res = await app.inject({ method: 'GET', url: '/healthz' })
+  const res = await app.inject({ method: 'GET', url: '/healthcheck' })
   assert.equal(res.statusCode, 200)
   assert.deepEqual(res.json(), { status: 'ok' })
 })

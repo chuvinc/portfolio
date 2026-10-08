@@ -55,3 +55,75 @@ jobs:
           cache-dependency-path: apps/api/package-lock.json
       - run: npm ci
       - run: npm test
+
+  # Boots the real compose stack and checks it through the nginx front door.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Start stack
+        run: docker compose up -d --build --wait
+      - name: Check endpoints through nginx
+        run: |
+          curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          curl -fsS http://localhost:8080/api/projects | jq -e 'length > 0'
+          curl -fsS http://localhost:8080/api/build-info | jq -e '.commit'
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Stop stack
+        if: always()
+        run: docker compose down
+
+  # Pages is static, so snapshot the real API's responses into the site.
+  pages-build:
+    needs: [web, api, e2e]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/api/package-lock.json
+      - run: npm ci
+        working-directory: apps/api
+      - run: npm ci
+        working-directory: apps/web
+      - name: Snapshot API into the site
+        working-directory: apps/api
+        env:
+          APP_VERSION: pages+build.${{ github.run_number }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          node src/server.js &
+          API_PID=$!
+          npx --yes wait-on http://localhost:3000/healthcheck
+          mkdir -p ../web/public/api
+          curl -fsS http://localhost:3000/api/projects > ../web/public/api/projects
+          curl -fsS http://localhost:3000/api/build-info > ../web/public/api/build-info
+          kill $API_PID
+      - uses: actions/configure-pages@v6
+      - name: Build site
+        working-directory: apps/web
+        run: npm run build -- --base=/${{ github.event.repository.name }}/
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: apps/web/dist
+
+  pages-deploy:
+    needs: pages-build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
