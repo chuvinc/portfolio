@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [develop]
   push:
-    branches: [develop, main]
+    branches: [develop]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -33,6 +33,7 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
 
   api:
