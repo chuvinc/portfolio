@@ -6,4 +6,11 @@ export const projects = [
     tags: ['react', 'node', 'github-actions', 'docker', 'kubernetes', 'terraform'],
     url: 'https://github.com/',
   },
+  {
+    id: 'ocr',
+    name: 'Private image-to-text (OCR)',
+    summary: 'Extracts text from images with Tesseract.js, entirely in the browser. Images are never uploaded or stored.',
+    tags: ['react', 'tesseract.js', 'webassembly', 'privacy'],
+    url: '#ocr',
+  },
 ]

@@ -1,4 +1,5 @@
 import { useApi } from './useApi'
+import OcrTool from './OcrTool'
 import './App.css'
 
 const SKILLS = [
@@ -21,9 +22,13 @@ function Projects() {
       {data.map((p) => (
         <li key={p.id} className="card">
           <h3>
-            <a href={p.url} target="_blank" rel="noopener noreferrer">
-              {p.name}
-            </a>
+            {p.url.startsWith('#') ? (
+              <a href={p.url}>{p.name}</a>
+            ) : (
+              <a href={p.url} target="_blank" rel="noopener noreferrer">
+                {p.name}
+              </a>
+            )}
           </h3>
           <p>{p.summary}</p>
           <ul className="tags">
@@ -67,6 +72,11 @@ function App() {
               <li key={s}>{s}</li>
             ))}
           </ul>
+        </section>
+
+        <section id="ocr">
+          <h2>Image to text (OCR)</h2>
+          <OcrTool />
         </section>
 
         <section id="projects">

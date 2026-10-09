@@ -75,3 +75,78 @@ footer {
   border-top: 1px solid var(--border);
   font-size: 14px;
 }
+
+.ocr {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drop {
+  display: block;
+  padding: 24px;
+  text-align: center;
+  border: 2px dashed var(--accent-border);
+  border-radius: 8px;
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.drop input {
+  display: block;
+  margin: 12px auto 0;
+}
+
+.preview {
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ocr button {
+  font: inherit;
+  padding: 6px 14px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ocr button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ocr textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--text-h);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  align-items: center;
+  font-size: 16px;
+}
+
+.options select {
+  font: inherit;
+  padding: 2px 6px;
+}
