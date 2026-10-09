@@ -106,3 +106,38 @@ export async function inferLayout(blob) {
   binarize(imageData)
   return analyzeInk(imageData)
 }
+
+const COLUMN_MERGE = 0.2 // ink strips closer than this share of a typical column width are one column
+
+// Splits a binarized image of vertical text into its columns. Returns [{ x, w }] left to
+// right, relative to the image. Needs a clear empty strip between neighbouring columns.
+export function columnRanges({ data, width, height }) {
+  const cols = new Array(width).fill(0)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) if (data[(y * width + x) * 4] === 0) cols[x]++
+  }
+  const cutoff = LINE_INK * Math.max(...cols)
+  const bands = []
+  let start = -1
+  for (let x = 0; x < width; x++) {
+    const on = cols[x] > cutoff
+    if (on && start < 0) start = x
+    if (!on && start >= 0) {
+      bands.push([start, x - 1])
+      start = -1
+    }
+  }
+  if (start >= 0) bands.push([start, width - 1])
+  if (bands.length < 2) return bands.map(([a, b]) => ({ x: a, w: b - a + 1 }))
+
+  // Strokes within one glyph can leave thin gaps; fold those back into their column.
+  const widths = bands.map(([a, b]) => b - a + 1).sort((a, b) => a - b)
+  const typical = widths[Math.floor(widths.length / 2)]
+  const merged = [bands[0]]
+  for (const [a, b] of bands.slice(1)) {
+    const last = merged[merged.length - 1]
+    if (a - last[1] - 1 < Math.max(2, COLUMN_MERGE * typical)) last[1] = b
+    else merged.push([a, b])
+  }
+  return merged.map(([a, b]) => ({ x: a, w: b - a + 1 }))
+}

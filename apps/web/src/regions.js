@@ -1,4 +1,5 @@
-import { analyzeInk } from './layout'
+import { PSM } from 'tesseract.js'
+import { analyzeInk, columnRanges } from './layout'
 import { binarize } from './preprocess'
 
 const ANALYSIS_EDGE = 1000 // long edge of the copy we analyse
@@ -74,9 +75,66 @@ function crop({ data, width }, box) {
   return { data: out, width: w, height: h }
 }
 
+const SIZE_SPREAD = [0.4, 2.5] // a glyph is this far (x median) from the group's median size at most
+const MIN_UNIFORM = 0.6 // share of a group's blobs that must be glyph-sized, or it's artwork
+const MAX_DOMINANT = 0.6 // one blob holding more than this share of a group's ink is a drawing
+const MERGE_GAP = 1.6 // sibling groups within this many glyphs (and lined up) are one text area
+const MERGE_OVERLAP = 0.6 // ...if they overlap this much along the shared edge
+const STRIP_SPREAD = 3 // glyph centres spread this much more along one axis = one strip of text
+const PAD = 0.5 // grow each box by this many glyphs so edge strokes aren't clipped
+
+const size = (b) => Math.max(b.maxX - b.minX, b.maxY - b.minY) + 1
+const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
+
+// Text is made of similar-sized glyphs; drawings are one big shape or a mix of sizes.
+function looksLikeText(g) {
+  if (g.members.length < MIN_BLOBS) return false
+  const m = median(g.members.map(size))
+  const similar = g.members.filter((b) => size(b) >= m * SIZE_SPREAD[0] && size(b) <= m * SIZE_SPREAD[1])
+  if (similar.length < MIN_BLOBS || similar.length / g.members.length < MIN_UNIFORM) return false
+  return Math.max(...g.members.map((b) => b.area)) / g.area <= MAX_DOMINANT
+}
+
+const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0) + 1)
+
+// Two groups belong to one text area if they sit side by side (columns) or stacked
+// (lines), close together, with their edges lined up.
+function sameTextArea(a, b, reach) {
+  const xGap = Math.max(a.minX, b.minX) - Math.min(a.maxX, b.maxX)
+  const yGap = Math.max(a.minY, b.minY) - Math.min(a.maxY, b.maxY)
+  const yShare = overlap(a.minY, a.maxY, b.minY, b.maxY) / Math.min(a.maxY - a.minY + 1, b.maxY - b.minY + 1)
+  const xShare = overlap(a.minX, a.maxX, b.minX, b.maxX) / Math.min(a.maxX - a.minX + 1, b.maxX - b.minX + 1)
+  return (xGap <= reach && yShare >= MERGE_OVERLAP) || (yGap <= reach && xShare >= MERGE_OVERLAP)
+}
+
+function mergeGroups(a, b) {
+  return {
+    minX: Math.min(a.minX, b.minX),
+    maxX: Math.max(a.maxX, b.maxX),
+    minY: Math.min(a.minY, b.minY),
+    maxY: Math.max(a.maxY, b.maxY),
+    area: a.area + b.area,
+    members: [...a.members, ...b.members],
+  }
+}
+
+// A handful of glyphs strung along one axis is a single line or column, whatever
+// the box shape; this stops a short column being mistaken for horizontal text.
+function stripDirection(members, glyph) {
+  if (members.length < MIN_BLOBS) return null
+  const cx = members.map((b) => (b.minX + b.maxX) / 2)
+  const cy = members.map((b) => (b.minY + b.maxY) / 2)
+  const sx = Math.max(...cx) - Math.min(...cx)
+  const sy = Math.max(...cy) - Math.min(...cy)
+  if (sy > glyph && sy >= STRIP_SPREAD * sx) return 'vertical'
+  if (sx > glyph && sx >= STRIP_SPREAD * sy) return 'horizontal'
+  return null
+}
+
 // Groups ink into text regions on a binarized image. Glyphs close together merge into
-// lines/columns, and neighbouring lines/columns merge into blocks. Returns boxes in
-// the image's own pixels, each tagged with a direction and a Tesseract layout mode.
+// lines/columns, neighbouring lines/columns merge into blocks, and groups that don't
+// look like text (mixed sizes, one big shape, too dense or too faint) are dropped.
+// Returns padded boxes in the image's own pixels, tagged with a direction and layout mode.
 export function findRegions(image) {
   const { width, height } = image
   let blobs = findBlobs(image)
@@ -87,8 +145,7 @@ export function findRegions(image) {
     .slice(0, 4000)
   if (blobs.length < MIN_BLOBS) return []
 
-  const sizes = blobs.map((b) => Math.max(b.maxX - b.minX, b.maxY - b.minY) + 1).sort((a, b) => a - b)
-  const glyph = sizes[Math.floor(sizes.length * 0.7)]
+  const glyph = [...blobs.map(size)].sort((a, b) => a - b)[Math.floor(blobs.length * 0.7)]
   const gap = Math.max(2, glyph * GAP_FACTOR)
 
   // Union blobs whose boxes are within `gap` of each other (sweep over x).
@@ -107,38 +164,58 @@ export function findRegions(image) {
     }
   }
 
-  const groups = new Map()
+  const grouped = new Map()
   blobs.forEach((b, i) => {
     const root = find(i)
-    const g = groups.get(root)
-    if (g) {
-      g.minX = Math.min(g.minX, b.minX)
-      g.maxX = Math.max(g.maxX, b.maxX)
-      g.minY = Math.min(g.minY, b.minY)
-      g.maxY = Math.max(g.maxY, b.maxY)
-      g.area += b.area
-      g.blobs++
-    } else {
-      groups.set(root, { ...b, blobs: 1 })
-    }
+    const g = grouped.get(root)
+    if (g) grouped.set(root, mergeGroups(g, { ...b, members: [b] }))
+    else grouped.set(root, { ...b, members: [b] })
   })
 
+  // Keep text-like groups, then join siblings that are one text area split by a wide gap.
+  let groups = [...grouped.values()].filter(looksLikeText)
+  for (let merged = true; merged; ) {
+    merged = false
+    outer: for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        if (sameTextArea(groups[i], groups[j], glyph * MERGE_GAP)) {
+          groups[i] = mergeGroups(groups[i], groups[j])
+          groups.splice(j, 1)
+          merged = true
+          break outer
+        }
+      }
+    }
+  }
+
+  const pad = Math.round(glyph * PAD)
   const regions = []
-  for (const g of groups.values()) {
+  for (const g of groups) {
     const boxArea = (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
     const density = g.area / boxArea
-    if (g.blobs < MIN_BLOBS || boxArea < MIN_AREA_SHARE * width * height) continue
+    if (boxArea < MIN_AREA_SHARE * width * height) continue
     if (density > MAX_DENSITY || density < MIN_DENSITY) continue
-    const { direction, lines, psm } = analyzeInk(crop(image, g))
-    regions.push({
-      x: g.minX,
-      y: g.minY,
-      w: g.maxX - g.minX + 1,
-      h: g.maxY - g.minY + 1,
-      direction,
-      lines,
-      psm,
-    })
+
+    let { direction, lines, psm } = analyzeInk(crop(image, g))
+    const strip = stripDirection(g.members, glyph)
+    if (strip && strip !== direction) {
+      direction = strip
+      lines = 1
+      psm = strip === 'vertical' ? PSM.SINGLE_BLOCK_VERT_TEXT : PSM.SINGLE_LINE
+    }
+
+    // Several vertical columns: remember where each one is so they can be read one at a time.
+    let columns
+    if (direction === 'vertical' && lines > 1) {
+      const found = columnRanges(crop(image, g)).map((c) => ({ x: g.minX + c.x, w: c.w }))
+      if (found.length > 1) columns = found
+    }
+
+    const x0 = Math.max(0, g.minX - pad)
+    const y0 = Math.max(0, g.minY - pad)
+    const x1 = Math.min(width - 1, g.maxX + pad)
+    const y1 = Math.min(height - 1, g.maxY + pad)
+    regions.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, direction, lines, psm, columns })
   }
   return regions.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, MAX_REGIONS)
 }
@@ -172,6 +249,7 @@ export async function detectRegions(blob) {
     y: Math.round(r.y / scale),
     w: Math.round(r.w / scale),
     h: Math.round(r.h / scale),
+    columns: r.columns?.map((c) => ({ x: Math.round(c.x / scale), w: Math.round(c.w / scale) })),
   }))
   return { regions, ...size }
 }
@@ -180,9 +258,12 @@ export async function detectRegions(blob) {
 const TARGET_GLYPH = 48
 const MAX_UPSCALE = 4
 
-// For a single line/column the short side is one glyph; enlarge small ones.
-export const upscaleFor = ({ w, h, lines }) =>
-  lines <= 1 ? Math.min(MAX_UPSCALE, Math.max(1, TARGET_GLYPH / Math.min(w, h))) : 1
+// Enlarge small text towards a comfortable glyph size. For one line/column the short side is
+// one glyph; for a block, a line (or column) pitch is a good stand-in.
+export const upscaleFor = ({ w, h, lines, direction }) => {
+  const glyph = lines <= 1 ? Math.min(w, h) : direction === 'vertical' ? w / lines : h / lines
+  return Math.min(MAX_UPSCALE, Math.max(1, TARGET_GLYPH / glyph))
+}
 
 // Copies a region (plus a little padding) out of an image Blob as a PNG Blob, optionally enlarged.
 export async function cropRegion(blob, { x, y, w, h }, scale = 1) {
@@ -219,5 +300,10 @@ export async function classifyRegion(blob, { x, y, w, h }) {
   canvas.width = canvas.height = 0
   binarize(imageData)
   const { direction, lines, psm } = analyzeInk(imageData)
-  return { direction, lines, psm }
+  let columns
+  if (direction === 'vertical' && lines > 1) {
+    const found = columnRanges(imageData).map((c) => ({ x: x + Math.round(c.x / scale), w: Math.round(c.w / scale) }))
+    if (found.length > 1) columns = found
+  }
+  return { direction, lines, psm, columns }
 }

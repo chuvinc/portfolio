@@ -1,6 +1,6 @@
 import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
-import { languageFor, tidyText } from './languages'
+import { fixVerticalDashes, languageFor, tidyText } from './languages'
 import { enhanceImage } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
@@ -62,10 +62,32 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
       if (!workers.has(lang)) workers.set(lang, await makeWorker(lang))
       const worker = workers.get(lang)
       await worker.setParameters({ tessedit_pageseg_mode: region.psm })
-      let crop = await cropRegion(image, region, upscaleFor(region))
-      if (enhance) crop = await enhanceImage(crop)
-      const { data } = await worker.recognize(crop)
-      results.push({ id: region.id, text: tidyText(data.text).trim(), confidence: data.confidence, language: lang })
+      const read = async (box, unit) => {
+        let crop = await cropRegion(image, box, upscaleFor(unit))
+        if (enhance) crop = await enhanceImage(crop)
+        return (await worker.recognize(crop)).data
+      }
+
+      let text
+      let confidence
+      if (region.columns?.length > 1) {
+        // Tesseract struggles to split and order vertical columns itself, so read each
+        // column alone, from the right (the order Japanese vertical text is read in).
+        const columns = [...region.columns].sort((a, b) => b.x - a.x)
+        const reads = []
+        for (const col of columns) {
+          const slack = Math.max(2, Math.round(col.w * 0.25))
+          const box = { x: col.x - slack, y: region.y, w: col.w + slack * 2, h: region.h }
+          reads.push(await read(box, { w: col.w, h: region.h, lines: 1, direction: 'vertical' }))
+        }
+        text = reads.map((d) => tidyText(d.text).trim()).filter(Boolean).join('\n')
+        confidence = reads.reduce((sum, d) => sum + d.confidence, 0) / reads.length
+      } else {
+        const data = await read(region, region)
+        text = tidyText(data.text).trim()
+        confidence = data.confidence
+      }
+      results.push({ id: region.id, text: region.direction === 'vertical' ? fixVerticalDashes(text) : text, confidence, language: lang })
     }
   } finally {
     await Promise.all([...workers.values()].map((w) => w.terminate()))

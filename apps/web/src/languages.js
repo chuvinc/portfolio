@@ -26,3 +26,12 @@ export function languageFor(id, direction) {
 
 // Pages in these languages are laid out right to left when text is vertical.
 export const readsRightToLeft = (id) => id.startsWith('jpn')
+
+// In vertical Japanese the long-vowel mark ー (and a dash) is drawn as a vertical line,
+// which Tesseract often reads as a bar or letter after a kana. Restore it.
+const KANA = '[\u3040-\u30ff]'
+const STRAY_BAR = new RegExp(`(?<=${KANA})[|｜丨¦lI]`, 'g')
+
+export function fixVerticalDashes(text) {
+  return text.replace(STRAY_BAR, 'ー')
+}

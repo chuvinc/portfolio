@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { PSM } from 'tesseract.js'
-import { findRegions, orderRegions } from './regions'
+import { findRegions, orderRegions, upscaleFor } from './regions'
 
 function blank(width, height) {
   return { data: new Uint8ClampedArray(width * height * 4).fill(255), width, height }
@@ -56,4 +56,76 @@ test('orderRegions reads rows top to bottom, right to left when asked', () => {
   ]
   expect(orderRegions(regions, 1000, true).map((r) => r.id)).toEqual(['b', 'a', 'c'])
   expect(orderRegions(regions, 1000, false).map((r) => r.id)).toEqual(['a', 'b', 'c'])
+})
+
+// A vertical bar, like the long-vowel mark ー in vertical text.
+const bar = (img, x, y, len = 10, thick = 2) => {
+  for (let yy = y; yy < y + len; yy++) for (let xx = x; xx < x + thick; xx++) img.data[(yy * img.width + xx) * 4] = 0
+}
+
+test('a group of wildly different blob sizes (artwork) is not text', () => {
+  const img = blank(600, 300)
+  const sizes = [6, 40, 12, 60, 50, 45, 8]
+  let x = 20
+  for (const s of sizes) {
+    ring(img, x, 20, s)
+    x += s + 5
+  }
+  expect(findRegions(img)).toEqual([])
+})
+
+test('two columns split by a wide gap are one text area', () => {
+  const img = blank(400, 300)
+  column(img, 100, 40, 10)
+  column(img, 100 + 10 + 14, 40, 10) // about 1.4 glyphs apart: past the glyph gap, within merge reach
+  const regions = findRegions(img)
+  expect(regions).toHaveLength(1)
+  expect(regions[0].direction).toBe('vertical')
+  expect(regions[0].w).toBeGreaterThan(30) // spans both columns
+})
+
+test('boxes are padded so edge strokes are not clipped', () => {
+  const img = blank(400, 200)
+  row(img, 100, 80, 8)
+  const [r] = findRegions(img)
+  expect(r.x).toBeLessThan(100)
+  expect(r.y).toBeLessThan(80)
+  expect(r.x + r.w).toBeGreaterThan(100 + 7 * 13 + 10)
+  expect(r.y + r.h).toBeGreaterThan(90)
+})
+
+test('a short column of glyphs is judged vertical, not horizontal', () => {
+  const img = blank(300, 200)
+  column(img, 100, 40, 3) // 3 glyphs: the box is only about 3:1, below the strip ratio
+  const [r] = findRegions(img)
+  expect(r.direction).toBe('vertical')
+  expect(r.psm).toBe(PSM.SINGLE_BLOCK_VERT_TEXT)
+})
+
+test('a vertical bar (dash) among vertical glyphs stays part of the column', () => {
+  const img = blank(300, 300)
+  column(img, 100, 40, 3)
+  bar(img, 104, 40 + 3 * 13, 10) // ー drawn as a vertical line, one glyph tall
+  column(img, 100, 40 + 4 * 13, 2)
+  const regions = findRegions(img)
+  expect(regions).toHaveLength(1)
+  expect(regions[0].h).toBeGreaterThan(6 * 13)
+})
+
+test('a vertical block records where each column is', () => {
+  const img = blank(400, 300)
+  column(img, 100, 40, 10)
+  column(img, 100 + 10 + 14, 40, 10)
+  column(img, 100 + 2 * 24, 40, 10)
+  const [r] = findRegions(img)
+  expect(r.direction).toBe('vertical')
+  expect(r.columns).toHaveLength(3)
+  expect(r.columns.map((c) => c.x)).toEqual([100, 124, 148])
+})
+
+test('upscaleFor enlarges blocks by their line/column pitch, not just single lines', () => {
+  expect(upscaleFor({ w: 90, h: 400, lines: 3, direction: 'vertical' })).toBeCloseTo(48 / 30)
+  expect(upscaleFor({ w: 400, h: 90, lines: 3, direction: 'horizontal' })).toBeCloseTo(48 / 30)
+  expect(upscaleFor({ w: 200, h: 24, lines: 1, direction: 'horizontal' })).toBe(2)
+  expect(upscaleFor({ w: 500, h: 200, lines: 2, direction: 'horizontal' })).toBe(1)
 })
