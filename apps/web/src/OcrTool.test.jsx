@@ -57,3 +57,13 @@ test('passes the chosen language, layout and enhance options to OCR', async () =
     expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7', enhance: true }, expect.any(Function)),
   )
 })
+
+test('pasting an image anywhere on the page loads it', async () => {
+  render(<OcrTool />)
+  const file = new File(['x'], 'clip.png', { type: 'image/png' })
+  const event = new Event('paste', { bubbles: true, cancelable: true })
+  event.clipboardData = { files: [file] }
+  document.body.dispatchEvent(event)
+
+  expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
+})

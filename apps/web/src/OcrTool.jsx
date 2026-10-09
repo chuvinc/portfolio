@@ -45,10 +45,22 @@ export default function OcrTool() {
     setState({ ...IDLE, image: file, previewUrl: previewUrl.current })
   }
 
-  const onPaste = (e) => {
-    const file = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'))
-    if (file) load(file)
-  }
+  // Listen on the whole page so Ctrl+V works without clicking into the drop box
+  // (clicking it opens the file picker). The ref keeps the listener on the latest `load`.
+  const loadRef = useRef(load)
+  useEffect(() => {
+    loadRef.current = load
+  })
+  useEffect(() => {
+    const onPaste = (e) => {
+      const file = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'))
+      if (!file) return
+      e.preventDefault()
+      loadRef.current(file)
+    }
+    document.addEventListener('paste', onPaste)
+    return () => document.removeEventListener('paste', onPaste)
+  }, [])
 
   const extract = async () => {
     const id = ++run.current
@@ -66,7 +78,7 @@ export default function OcrTool() {
   const busy = state.status && state.status !== 'done'
 
   return (
-    <div className="ocr" onPaste={onPaste}>
+    <div className="ocr">
       <p className="status">
         Your image is read in this browser tab. It is never uploaded or saved, and nothing is
         cached afterwards.
@@ -80,7 +92,7 @@ export default function OcrTool() {
           load(e.dataTransfer.files[0])
         }}
       >
-        Drop an image here, paste one, or choose a file
+        Drop an image here, press Ctrl+V to paste one, or click to choose a file
         <input
           type="file"
           accept="image/*"

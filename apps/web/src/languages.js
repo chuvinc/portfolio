@@ -1,10 +1,11 @@
-// Languages offered for OCR. Each `id` is a Tesseract language code, and its
-// data file is copied into public/ocr/lang by scripts/copy-ocr-assets.mjs
-// from the matching @tesseract.js-data/<id> package.
+// Languages offered for OCR. Each `id` is a Tesseract language code, or several
+// joined with '+' to load them together. Each code's data file is copied into
+// public/ocr/lang by scripts/copy-ocr-assets.mjs from @tesseract.js-data/<code>.
 export const LANGUAGES = [
   { id: 'eng', label: 'English' },
   { id: 'jpn', label: 'Japanese' },
   { id: 'jpn_vert', label: 'Japanese (vertical text)' },
+  { id: 'jpn+jpn_vert', label: 'Japanese (mixed horizontal + vertical)' },
 ]
 
 // Tesseract puts spaces between Japanese characters; drop them.

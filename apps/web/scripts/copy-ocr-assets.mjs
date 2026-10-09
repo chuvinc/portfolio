@@ -20,7 +20,8 @@ for (const file of readdirSync(coreDir)) {
   if (file.endsWith('-lstm.wasm.js')) cpSync(join(coreDir, file), join(out, 'core', file))
 }
 
-for (const { id } of LANGUAGES) {
+const codes = new Set(LANGUAGES.flatMap(({ id }) => id.split('+')))
+for (const id of codes) {
   cpSync(
     join(pkgDir(`@tesseract.js-data/${id}`), '4.0.0_best_int', `${id}.traineddata.gz`),
     join(out, 'lang', `${id}.traineddata.gz`),

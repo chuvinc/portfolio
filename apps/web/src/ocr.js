@@ -28,6 +28,10 @@ export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT,
     image = await enhanceImage(image)
   }
 
+  // Several models together: Tesseract picks per block, and a single global guess
+  // would be wrong for mixed pages, so skip auto-detect and use its own layout analysis.
+  if (layout === AUTO_LAYOUT && language.includes('+')) layout = PSM.AUTO
+
   let detected = null
   if (layout === AUTO_LAYOUT) {
     onProgress?.({ status: 'detecting layout', progress: 0 })
