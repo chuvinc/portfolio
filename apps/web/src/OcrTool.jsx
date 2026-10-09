@@ -5,7 +5,13 @@ import { LAYOUTS, recognize } from './ocr'
 const IDLE = { image: null, previewUrl: null, text: '', detected: null, status: '', progress: 0, error: null }
 
 // e.g. "vertical text, Tesseract layout 'One block of text'"
-function describe({ direction, lines, psm, language }) {
+function describe(detected) {
+  if (detected.mode === 'regions') {
+    const kept = detected.regions.filter((r) => r.kept)
+    const vertical = kept.filter((r) => r.direction === 'vertical').length
+    return `found ${detected.regions.length} text regions, kept ${kept.length} (${vertical} vertical, ${kept.length - vertical} horizontal). Boxes: green = read, red = dropped as unlikely text`
+  }
+  const { direction, lines, psm, language } = detected
   const layout = LAYOUTS.find((l) => l.id === psm)?.label ?? psm
   const lang = LANGUAGES.find((l) => l.id === language)?.label ?? language
   return `${direction} text, ${lines} line${lines === 1 ? '' : 's'} → "${layout}" (${lang})`
@@ -105,7 +111,23 @@ export default function OcrTool() {
 
       {state.previewUrl && (
         <>
-          <img className="preview" src={state.previewUrl} alt="Selected for text extraction" />
+          <div className="previewBox">
+            <img className="preview" src={state.previewUrl} alt="Selected for text extraction" />
+            {state.detected?.mode === 'regions' &&
+              state.detected.regions.map((r, i) => (
+                <div
+                  key={i}
+                  className={r.kept ? 'region kept' : 'region dropped'}
+                  title={`${r.direction}, confidence ${Math.round(r.confidence)}`}
+                  style={{
+                    left: `${(r.x / state.detected.page.width) * 100}%`,
+                    top: `${(r.y / state.detected.page.height) * 100}%`,
+                    width: `${(r.w / state.detected.page.width) * 100}%`,
+                    height: `${(r.h / state.detected.page.height) * 100}%`,
+                  }}
+                />
+              ))}
+          </div>
           <div className="options">
             <label>
               Language{' '}

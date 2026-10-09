@@ -23,3 +23,6 @@ export function languageFor(id, direction) {
   if (direction === 'horizontal' && id === 'jpn_vert') return 'jpn'
   return id
 }
+
+// Pages in these languages are laid out right to left when text is vertical.
+export const readsRightToLeft = (id) => id.startsWith('jpn')
