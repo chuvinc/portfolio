@@ -129,3 +129,20 @@ test('upscaleFor enlarges blocks by their line/column pitch, not just single lin
   expect(upscaleFor({ w: 200, h: 24, lines: 1, direction: 'horizontal' })).toBe(2)
   expect(upscaleFor({ w: 500, h: 200, lines: 2, direction: 'horizontal' })).toBe(1)
 })
+
+test('a busy page of large artwork does not swallow the text into one page-sized box', () => {
+  const img = blank(800, 800)
+  // Lots of large, scattered shapes (artwork) that would skew a size estimate.
+  for (let i = 0; i < 25; i++) ring(img, 20 + (i % 5) * 150, 20 + Math.floor(i / 5) * 150, 40 + (i % 3) * 15)
+  // Real text in a clear spot: one horizontal line and one vertical column.
+  row(img, 40, 740, 12)
+  column(img, 760, 100, 8)
+
+  const regions = findRegions(img)
+  expect(regions.length).toBeGreaterThanOrEqual(1)
+  expect(regions.every((r) => r.w * r.h < 0.6 * 800 * 800)).toBe(true) // nothing covers the page
+  const h = regions.find((r) => r.direction === 'horizontal')
+  const v = regions.find((r) => r.direction === 'vertical')
+  expect(h && h.y).toBeGreaterThan(700)
+  expect(v && v.x).toBeGreaterThan(700)
+})

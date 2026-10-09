@@ -124,7 +124,9 @@ function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
             width: pct(r.w, page.width),
             height: pct(r.h, page.height),
           }}
-        />
+        >
+          <span className="tag">{r.id}</span>
+        </div>
       ))}
       {drag && (
         <div
@@ -415,6 +417,21 @@ export default function OcrTool() {
             </label>
           )}
           <textarea readOnly rows={8} value={output} aria-label="Extracted text" />
+          {regionMode && state.regions && (
+            <details>
+              <summary>What was read from each region</summary>
+              <ul className="results">
+                {state.regions
+                  .filter((r) => r.included && r.text !== undefined)
+                  .map((r) => (
+                    <li key={r.id}>
+                      <strong>#{r.id}</strong> {r.direction}, {Math.round(r.confidence)}% sure
+                      {r.columns ? `, ${r.columns.length} columns` : ''}: {r.text || '(nothing)'}
+                    </li>
+                  ))}
+              </ul>
+            </details>
+          )}
           <div className="actions">
             <button type="button" onClick={() => navigator.clipboard.writeText(output)}>
               Copy text

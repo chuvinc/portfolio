@@ -4,7 +4,9 @@ import { binarize } from './preprocess'
 
 const ANALYSIS_EDGE = 1000 // long edge of the copy we analyse
 const MIN_SPECK = 3 // ignore ink blobs smaller than this many pixels
-const GAP_FACTOR = 0.9 // blobs closer than this many typical-glyph sizes are one group
+const GAP_FACTOR = 1.2 // two blobs closer than this many (smaller blob) sizes are one group
+const MAX_REGION_SHARE = 0.6 // a box covering more than this share of the page is the page, not text
+const SAME_SIZE = [0.6, 1.67] // groups merge only if their glyphs are this close in size
 const MIN_BLOBS = 3 // a text group has at least this many glyphs
 const MIN_AREA_SHARE = 0.0008 // ...and its box covers at least this share of the page
 const MAX_DENSITY = 0.65 // ink share of the group's box; above this it's a solid picture
@@ -86,6 +88,26 @@ const PAD = 0.5 // grow each box by this many glyphs so edge strokes aren't clip
 const size = (b) => Math.max(b.maxX - b.minX, b.maxY - b.minY) + 1
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
 
+// The most common blob size on the page. Text has hundreds of same-sized glyphs, so they
+// form the biggest peak in a size histogram; artwork is scattered and can't outvote them.
+function typicalGlyph(blobs) {
+  const sized = blobs.filter((b) => b.area >= 8).map(size)
+  if (sized.length === 0) return 8
+  const bin = (s) => Math.round(Math.log2(s) * 4) // quarter-octave bins
+  const counts = new Map()
+  for (const s of sized) counts.set(bin(s), (counts.get(bin(s)) ?? 0) + 1)
+  let best = null
+  let bestScore = -1
+  for (const key of counts.keys()) {
+    const score = (counts.get(key - 1) ?? 0) + counts.get(key) + (counts.get(key + 1) ?? 0)
+    if (score > bestScore) {
+      best = key
+      bestScore = score
+    }
+  }
+  return median(sized.filter((s) => Math.abs(bin(s) - best) <= 1))
+}
+
 // Text is made of similar-sized glyphs; drawings are one big shape or a mix of sizes.
 function looksLikeText(g) {
   if (g.members.length < MIN_BLOBS) return false
@@ -105,6 +127,12 @@ function sameTextArea(a, b, reach) {
   const yShare = overlap(a.minY, a.maxY, b.minY, b.maxY) / Math.min(a.maxY - a.minY + 1, b.maxY - b.minY + 1)
   const xShare = overlap(a.minX, a.maxX, b.minX, b.maxX) / Math.min(a.maxX - a.minX + 1, b.maxX - b.minX + 1)
   return (xGap <= reach && yShare >= MERGE_OVERLAP) || (yGap <= reach && xShare >= MERGE_OVERLAP)
+}
+
+// Only groups with similar-sized glyphs are parts of the same text area.
+const comparable = (a, b) => {
+  const ratio = median(a.members.map(size)) / median(b.members.map(size))
+  return ratio >= SAME_SIZE[0] && ratio <= SAME_SIZE[1]
 }
 
 function mergeGroups(a, b) {
@@ -145,10 +173,10 @@ export function findRegions(image) {
     .slice(0, 4000)
   if (blobs.length < MIN_BLOBS) return []
 
-  const glyph = [...blobs.map(size)].sort((a, b) => a - b)[Math.floor(blobs.length * 0.7)]
-  const gap = Math.max(2, glyph * GAP_FACTOR)
+  const glyph = typicalGlyph(blobs)
 
-  // Union blobs whose boxes are within `gap` of each other (sweep over x).
+  // Union blobs whose boxes are within a gap set by the SMALLER of the two, so a drawing
+  // next to text can't pull the text towards it. Sweep over x for speed.
   blobs.sort((a, b) => a.minX - b.minX)
   const parent = blobs.map((_, i) => i)
   const find = (a) => {
@@ -157,8 +185,13 @@ export function findRegions(image) {
   }
   for (let i = 0; i < blobs.length; i++) {
     for (let j = i + 1; j < blobs.length; j++) {
-      if (blobs[j].minX > blobs[i].maxX + gap) break
-      if (blobs[j].minY <= blobs[i].maxY + gap && blobs[i].minY <= blobs[j].maxY + gap) {
+      if (blobs[j].minX > blobs[i].maxX + GAP_FACTOR * size(blobs[i])) break
+      const gap = Math.max(2, GAP_FACTOR * Math.min(size(blobs[i]), size(blobs[j])))
+      if (
+        blobs[j].minX <= blobs[i].maxX + gap &&
+        blobs[j].minY <= blobs[i].maxY + gap &&
+        blobs[i].minY <= blobs[j].maxY + gap
+      ) {
         parent[find(j)] = find(i)
       }
     }
@@ -178,7 +211,7 @@ export function findRegions(image) {
     merged = false
     outer: for (let i = 0; i < groups.length; i++) {
       for (let j = i + 1; j < groups.length; j++) {
-        if (sameTextArea(groups[i], groups[j], glyph * MERGE_GAP)) {
+        if (comparable(groups[i], groups[j]) && sameTextArea(groups[i], groups[j], glyph * MERGE_GAP)) {
           groups[i] = mergeGroups(groups[i], groups[j])
           groups.splice(j, 1)
           merged = true
@@ -193,7 +226,7 @@ export function findRegions(image) {
   for (const g of groups) {
     const boxArea = (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
     const density = g.area / boxArea
-    if (boxArea < MIN_AREA_SHARE * width * height) continue
+    if (boxArea < MIN_AREA_SHARE * width * height || boxArea > MAX_REGION_SHARE * width * height) continue
     if (density > MAX_DENSITY || density < MIN_DENSITY) continue
 
     let { direction, lines, psm } = analyzeInk(crop(image, g))
