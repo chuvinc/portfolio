@@ -44,9 +44,11 @@ function regionText(regions, page, language, showLow) {
     .join('\n\n')
 }
 
-// Boxes over the preview. Click a box to switch it on/off; drag on empty space to add one.
+// Boxes over the preview. A short press toggles the smallest box under the pointer;
+// dragging draws a new box, even on top of existing ones.
 function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
   const [drag, setDrag] = useState(null)
+  const dragged = useRef(false) // a drag ends with a click event we must ignore
 
   const point = (e) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -62,6 +64,7 @@ function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
     const h = Math.abs(drag.y1 - drag.y0)
     setDrag(null)
     if (w < MIN_DRAG || h < MIN_DRAG) return
+    dragged.current = true
     onAdd({
       x: Math.round(x * page.width),
       y: Math.round(y * page.height),
@@ -70,37 +73,57 @@ function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
     })
   }
 
+  const toggleAt = (e) => {
+    if (dragged.current) {
+      dragged.current = false
+      return
+    }
+    const { x, y } = point(e)
+    const px = x * page.width
+    const py = y * page.height
+    const hit = regions
+      .filter((r) => px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h)
+      .sort((a, b) => a.w * a.h - b.w * b.h)[0]
+    if (hit) onToggle(hit.id)
+  }
+
   const kind = (r) => {
     if (!r.included) return 'off'
     if (r.text !== undefined && !showLow && r.confidence < MIN_CONFIDENCE) return 'low'
     return 'on'
   }
 
+  // Biggest first, so small boxes paint on top of the ones containing them.
+  const painted = [...regions].sort((a, b) => b.w * b.h - a.w * a.h)
+
   return (
     <div
       className="overlay"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture?.(e.pointerId)
+        dragged.current = false
         const p = point(e)
         setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y })
       }}
-      onPointerMove={(e) => drag && setDrag({ ...drag, ...(({ x, y }) => ({ x1: x, y1: y }))(point(e)) })}
+      onPointerMove={(e) => {
+        if (!drag) return
+        const p = point(e)
+        setDrag({ ...drag, x1: p.x, y1: p.y })
+      }}
       onPointerUp={finishDrag}
       onPointerCancel={() => setDrag(null)}
+      onClick={toggleAt}
     >
-      {regions.map((r) => (
+      {painted.map((r) => (
         <div
           key={r.id}
           className={`region ${kind(r)}`}
-          title={`${r.direction}${r.confidence == null ? '' : `, ${Math.round(r.confidence)}% confident`}. Click to ${r.included ? 'exclude' : 'include'}.`}
           style={{
             left: pct(r.x, page.width),
             top: pct(r.y, page.height),
             width: pct(r.w, page.width),
             height: pct(r.h, page.height),
           }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => onToggle(r.id)}
         />
       ))}
       {drag && (
@@ -197,7 +220,7 @@ export default function OcrTool() {
     guarded({ regions: null, status: 'finding text regions' }, async () => {
       const { regions, page } = await findTextRegions(state.image)
       nextRegionId.current = regions.length + 1
-      const found = regions.map((r, i) => ({ ...r, id: i + 1, included: true }))
+      const found = regions.map((r, i) => ({ ...r, id: i + 1, included: false }))
       return () => ({ regions: found, page, status: '' })
     })
 
@@ -217,6 +240,9 @@ export default function OcrTool() {
 
   const toggleRegion = (id) =>
     setState((s) => ({ ...s, regions: s.regions.map((r) => (r.id === id ? { ...r, included: !r.included } : r)) }))
+
+  const setAllRegions = (included) =>
+    setState((s) => ({ ...s, regions: s.regions.map((r) => ({ ...r, included })) }))
 
   const addRegion = async (box) => {
     const id = run.current
@@ -293,8 +319,9 @@ export default function OcrTool() {
           </div>
           {regionMode && state.regions && (
             <p className="status">
-              Found {state.regions.length} text regions. Click a box to switch it off (red) or back
-              on (green), or drag on the image to add your own. Then read the regions.
+              Found {state.regions.length} candidate boxes, all switched off (red). Click the ones
+              that really contain text to turn them green. Drag anywhere to draw your own box, even
+              over an existing one. Then read the green regions.
             </p>
           )}
           <div className="options">
@@ -348,6 +375,12 @@ export default function OcrTool() {
               <>
                 <button type="button" onClick={readPending} disabled={busy || pending === 0}>
                   Read {pending} region{pending === 1 ? '' : 's'}
+                </button>
+                <button type="button" onClick={() => setAllRegions(true)} disabled={busy}>
+                  All on
+                </button>
+                <button type="button" onClick={() => setAllRegions(false)} disabled={busy}>
+                  All off
                 </button>
                 <button type="button" onClick={findRegions} disabled={busy}>
                   Find again

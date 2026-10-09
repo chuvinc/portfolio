@@ -2,7 +2,7 @@ import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
 import { languageFor, tidyText } from './languages'
 import { enhanceImage } from './preprocess'
-import { classifyRegion, cropRegion, detectRegions } from './regions'
+import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
 export { classifyRegion }
 
@@ -62,7 +62,7 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
       if (!workers.has(lang)) workers.set(lang, await makeWorker(lang))
       const worker = workers.get(lang)
       await worker.setParameters({ tessedit_pageseg_mode: region.psm })
-      let crop = await cropRegion(image, region)
+      let crop = await cropRegion(image, region, upscaleFor(region))
       if (enhance) crop = await enhanceImage(crop)
       const { data } = await worker.recognize(crop)
       results.push({ id: region.id, text: tidyText(data.text).trim(), confidence: data.confidence, language: lang })

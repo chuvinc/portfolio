@@ -4,7 +4,8 @@ import { binarize } from './preprocess'
 const ANALYSIS_EDGE = 1000 // long edge of the copy we analyse
 const MIN_SPECK = 3 // ignore ink blobs smaller than this many pixels
 const GAP_FACTOR = 0.9 // blobs closer than this many typical-glyph sizes are one group
-const MIN_BLOBS = 2 // a text group has at least this many glyphs
+const MIN_BLOBS = 3 // a text group has at least this many glyphs
+const MIN_AREA_SHARE = 0.0008 // ...and its box covers at least this share of the page
 const MAX_DENSITY = 0.65 // ink share of the group's box; above this it's a solid picture
 const MIN_DENSITY = 0.02 // ...and below this it's a stray line or smudge
 const MAX_REGIONS = 40
@@ -126,7 +127,8 @@ export function findRegions(image) {
   for (const g of groups.values()) {
     const boxArea = (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
     const density = g.area / boxArea
-    if (g.blobs < MIN_BLOBS || density > MAX_DENSITY || density < MIN_DENSITY) continue
+    if (g.blobs < MIN_BLOBS || boxArea < MIN_AREA_SHARE * width * height) continue
+    if (density > MAX_DENSITY || density < MIN_DENSITY) continue
     const { direction, lines, psm } = analyzeInk(crop(image, g))
     regions.push({
       x: g.minX,
@@ -174,8 +176,16 @@ export async function detectRegions(blob) {
   return { regions, ...size }
 }
 
-// Copies a region (plus a little padding) out of an image Blob as a PNG Blob.
-export async function cropRegion(blob, { x, y, w, h }) {
+// Tesseract reads best when a glyph is around this many pixels tall.
+const TARGET_GLYPH = 48
+const MAX_UPSCALE = 4
+
+// For a single line/column the short side is one glyph; enlarge small ones.
+export const upscaleFor = ({ w, h, lines }) =>
+  lines <= 1 ? Math.min(MAX_UPSCALE, Math.max(1, TARGET_GLYPH / Math.min(w, h))) : 1
+
+// Copies a region (plus a little padding) out of an image Blob as a PNG Blob, optionally enlarged.
+export async function cropRegion(blob, { x, y, w, h }, scale = 1) {
   const bitmap = await createImageBitmap(blob)
   const pad = Math.round(Math.max(w, h) * 0.04) + 4
   const sx = Math.max(0, x - pad)
@@ -183,9 +193,11 @@ export async function cropRegion(blob, { x, y, w, h }) {
   const sw = Math.min(bitmap.width - sx, w + pad * 2)
   const sh = Math.min(bitmap.height - sy, h + pad * 2)
   const canvas = document.createElement('canvas')
-  canvas.width = sw
-  canvas.height = sh
-  canvas.getContext('2d').drawImage(bitmap, sx, sy, sw, sh, 0, 0, sw, sh)
+  canvas.width = Math.round(sw * scale)
+  canvas.height = Math.round(sh * scale)
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
   bitmap.close()
   const result = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
   canvas.width = canvas.height = 0

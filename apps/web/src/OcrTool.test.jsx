@@ -82,19 +82,32 @@ test('pasting an image anywhere on the page loads it', async () => {
   expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
 })
 
-test('region mode: find, switch a box off, read, and ghost text is held back', async () => {
+// Maps pixel coordinates 1:1 onto the mocked 1000x800 page.
+function overlay() {
+  const el = document.querySelector('.overlay')
+  el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 })
+  return el
+}
+const clickAt = (el, x, y) => fireEvent.click(el, { clientX: x, clientY: y })
+
+async function findRegionsMode() {
   render(<OcrTool />)
   pick()
   fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
-
   fireEvent.click(screen.getByText('Find text regions'))
-  expect(await screen.findByText('Read 2 regions')).toBeTruthy()
+  await screen.findByText(/all switched off/)
+  return overlay()
+}
 
-  // Switch the second box off, so only one region is read.
-  const boxes = document.querySelectorAll('.region')
-  expect(boxes).toHaveLength(2)
-  fireEvent.click(boxes[1])
-  expect(boxes[1].className).toContain('off')
+test('region mode: boxes start off, clicking turns them on, only those are read', async () => {
+  const el = await findRegionsMode()
+  const boxes = () => [...document.querySelectorAll('.region')]
+  expect(boxes()).toHaveLength(2)
+  expect(boxes().every((b) => b.classList.contains('off'))).toBe(true)
+  expect(screen.getByText('Read 0 regions')).toBeTruthy()
+
+  clickAt(el, 150, 120) // the horizontal box
+  expect(boxes().filter((b) => b.classList.contains('on'))).toHaveLength(1)
   fireEvent.click(screen.getByText('Read 1 region'))
 
   await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
@@ -102,13 +115,22 @@ test('region mode: find, switch a box off, read, and ghost text is held back', a
 })
 
 test('region mode: low-confidence regions are hidden until asked for', async () => {
-  render(<OcrTool />)
-  pick()
-  fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
-  fireEvent.click(screen.getByText('Find text regions'))
-  fireEvent.click(await screen.findByText('Read 2 regions'))
+  await findRegionsMode()
+  fireEvent.click(screen.getByText('All on'))
+  fireEvent.click(screen.getByText('Read 2 regions'))
 
   await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
   fireEvent.click(screen.getByLabelText(/Include regions Tesseract was unsure about/))
   expect(screen.getByLabelText('Extracted text').value).toContain('text 2')
+})
+
+test('region mode: dragging over an existing box draws a new one instead of toggling', async () => {
+  const el = await findRegionsMode()
+  fireEvent.pointerDown(el, { clientX: 710, clientY: 200 }) // inside the vertical box
+  fireEvent.pointerMove(el, { clientX: 745, clientY: 260 })
+  fireEvent.pointerUp(el, { clientX: 745, clientY: 260 })
+  clickAt(el, 745, 260) // the click that follows a drag must not toggle anything
+
+  await waitFor(() => expect(document.querySelectorAll('.region')).toHaveLength(3))
+  expect(document.querySelectorAll('.region.on')).toHaveLength(1) // only the new box is on
 })
