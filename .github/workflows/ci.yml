@@ -5,6 +5,7 @@ on:
     branches: [develop]
   push:
     branches: [develop]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -78,7 +79,8 @@ jobs:
   # Pages is static, so snapshot the real API's responses into the site.
   pages-build:
     needs: [web, api, e2e]
-    if: github.event_name == 'push'
+    # Deploy on pushes, or on a manual run from develop (never from another branch).
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
