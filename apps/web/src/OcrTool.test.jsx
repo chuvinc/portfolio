@@ -5,10 +5,11 @@ import { recognize } from './ocr'
 
 vi.mock('./ocr', () => ({
   LAYOUTS: [
-    { id: '3', label: 'Automatic' },
+    { id: 'auto', label: 'Auto-detect' },
+    { id: '3', label: 'Tesseract default' },
     { id: '7', label: 'A single line' },
   ],
-  recognize: vi.fn(async () => 'hello world'),
+  recognize: vi.fn(async () => ({ text: 'hello world', detected: null })),
 }))
 
 beforeEach(() => {

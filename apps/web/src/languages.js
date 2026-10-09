@@ -14,3 +14,11 @@ const CJK_GAP = new RegExp(`(?<=${CJK})[ \t]+(?=${CJK})`, 'g')
 export function tidyText(text) {
   return text.replace(CJK_GAP, '')
 }
+
+// Japanese has separate horizontal and vertical models; pick the one that matches
+// the detected text direction. Other languages are unchanged.
+export function languageFor(id, direction) {
+  if (direction === 'vertical' && id === 'jpn') return 'jpn_vert'
+  if (direction === 'horizontal' && id === 'jpn_vert') return 'jpn'
+  return id
+}

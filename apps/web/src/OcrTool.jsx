@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { LANGUAGES } from './languages'
 import { LAYOUTS, recognize } from './ocr'
 
-const IDLE = { image: null, previewUrl: null, text: '', status: '', progress: 0, error: null }
+const IDLE = { image: null, previewUrl: null, text: '', detected: null, status: '', progress: 0, error: null }
+
+// e.g. "vertical text, Tesseract layout 'One block of text'"
+function describe({ direction, lines, psm, language }) {
+  const layout = LAYOUTS.find((l) => l.id === psm)?.label ?? psm
+  const lang = LANGUAGES.find((l) => l.id === language)?.label ?? language
+  return `${direction} text, ${lines} line${lines === 1 ? '' : 's'} → "${layout}" (${lang})`
+}
 
 export default function OcrTool() {
   const [state, setState] = useState(IDLE)
@@ -45,12 +52,12 @@ export default function OcrTool() {
 
   const extract = async () => {
     const id = ++run.current
-    setState((s) => ({ ...s, text: '', error: null, status: 'starting', progress: 0 }))
+    setState((s) => ({ ...s, text: '', detected: null, error: null, status: 'starting', progress: 0 }))
     try {
-      const text = await recognize(state.image, options, (m) => {
+      const { text, detected } = await recognize(state.image, options, (m) => {
         if (run.current === id) setState((s) => ({ ...s, status: m.status, progress: m.progress }))
       })
-      if (run.current === id) setState((s) => ({ ...s, text, status: 'done', progress: 1 }))
+      if (run.current === id) setState((s) => ({ ...s, text, detected, status: 'done', progress: 1 }))
     } catch (error) {
       if (run.current === id) setState((s) => ({ ...s, error, status: '' }))
     }
@@ -143,6 +150,7 @@ export default function OcrTool() {
 
       {state.status === 'done' && (
         <>
+          {state.detected && <p className="status">Auto-detected: {describe(state.detected)}</p>}
           <textarea readOnly rows={8} value={state.text} aria-label="Extracted text" />
           <div className="actions">
             <button type="button" onClick={() => navigator.clipboard.writeText(state.text)}>
