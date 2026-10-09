@@ -1,15 +1,29 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import OcrTool from './OcrTool'
-import { recognize } from './ocr'
+import { readRegions, recognize } from './ocr'
 
 vi.mock('./ocr', () => ({
   LAYOUTS: [
     { id: 'auto', label: 'Auto-detect' },
+    { id: 'regions', label: 'Find text regions (mixed pages)' },
     { id: '3', label: 'Tesseract default' },
     { id: '7', label: 'A single line' },
   ],
+  MIN_CONFIDENCE: 40,
+  usesRegions: ({ layout }) => layout === 'regions',
   recognize: vi.fn(async () => ({ text: 'hello world', detected: null })),
+  findTextRegions: vi.fn(async () => ({
+    page: { width: 1000, height: 800 },
+    regions: [
+      { x: 100, y: 100, w: 200, h: 50, direction: 'horizontal', lines: 1, psm: '7' },
+      { x: 700, y: 100, w: 60, h: 400, direction: 'vertical', lines: 1, psm: '5' },
+    ],
+  })),
+  readRegions: vi.fn(async (_image, regions) =>
+    regions.map((r) => ({ id: r.id, text: `text ${r.id}`, confidence: r.id === 2 ? 20 : 90, language: 'eng' })),
+  ),
+  classifyRegion: vi.fn(async () => ({ direction: 'horizontal', lines: 1, psm: '7' })),
 }))
 
 beforeEach(() => {
@@ -66,4 +80,35 @@ test('pasting an image anywhere on the page loads it', async () => {
   document.body.dispatchEvent(event)
 
   expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
+})
+
+test('region mode: find, switch a box off, read, and ghost text is held back', async () => {
+  render(<OcrTool />)
+  pick()
+  fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
+
+  fireEvent.click(screen.getByText('Find text regions'))
+  expect(await screen.findByText('Read 2 regions')).toBeTruthy()
+
+  // Switch the second box off, so only one region is read.
+  const boxes = document.querySelectorAll('.region')
+  expect(boxes).toHaveLength(2)
+  fireEvent.click(boxes[1])
+  expect(boxes[1].className).toContain('off')
+  fireEvent.click(screen.getByText('Read 1 region'))
+
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+  expect(readRegions.mock.calls.at(-1)[1]).toHaveLength(1)
+})
+
+test('region mode: low-confidence regions are hidden until asked for', async () => {
+  render(<OcrTool />)
+  pick()
+  fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
+  fireEvent.click(screen.getByText('Find text regions'))
+  fireEvent.click(await screen.findByText('Read 2 regions'))
+
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+  fireEvent.click(screen.getByLabelText(/Include regions Tesseract was unsure about/))
+  expect(screen.getByLabelText('Extracted text').value).toContain('text 2')
 })

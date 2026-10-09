@@ -112,20 +112,41 @@ footer {
   border-radius: 8px;
 }
 
+.overlay {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
 .region {
   position: absolute;
   box-sizing: border-box;
   border: 2px solid;
-  pointer-events: none;
+  cursor: pointer;
 }
 
-.region.kept {
+.region.on {
   border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.08);
 }
 
-.region.dropped {
+.region.off {
   border-color: #ef4444;
   border-style: dashed;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.region.low {
+  border-color: #f59e0b;
+  border-style: dashed;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.region.drawing {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+  pointer-events: none;
 }
 
 .actions {

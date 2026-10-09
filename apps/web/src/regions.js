@@ -191,3 +191,21 @@ export async function cropRegion(blob, { x, y, w, h }) {
   canvas.width = canvas.height = 0
   return result
 }
+
+// Works out direction and layout mode for a box the user drew by hand.
+export async function classifyRegion(blob, { x, y, w, h }) {
+  const bitmap = await createImageBitmap(blob)
+  const scale = Math.min(1, ANALYSIS_EDGE / Math.max(w, h))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(w * scale))
+  canvas.height = Math.max(1, Math.round(h * scale))
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(bitmap, x, y, w, h, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  canvas.width = canvas.height = 0
+  binarize(imageData)
+  const { direction, lines, psm } = analyzeInk(imageData)
+  return { direction, lines, psm }
+}
