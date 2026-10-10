@@ -343,22 +343,9 @@ footer {
   flex-wrap: wrap;
 }
 
-/* Beside the picture the controls stay in view while a tall picture scrolls. */
-.workspace:not(.expanded) .sidebar {
-  position: sticky;
-  top: 8px;
-  max-height: calc(100vh - 16px);
-  overflow-y: auto;
-}
-
 @media (max-width: 800px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .workspace:not(.expanded) .sidebar {
-    position: static;
-    max-height: none;
   }
 }
 
@@ -386,8 +373,6 @@ footer {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 220px;
-  overflow-y: auto;
   font-size: 15px;
 }
 
