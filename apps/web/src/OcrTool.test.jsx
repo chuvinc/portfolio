@@ -62,15 +62,16 @@ test('ignores non-image files', () => {
   expect(screen.queryByText('Extract text')).toBeNull()
 })
 
-test('passes the chosen layout to OCR, with Japanese as the language', async () => {
+test('passes the chosen layout and enhance options to OCR, with Japanese as the language', async () => {
   render(<OcrTool />)
   pick()
 
   fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: '7' } })
+  fireEvent.click(screen.getByLabelText(/Enhance image/))
   fireEvent.click(screen.getByText('Extract text'))
 
   await waitFor(() =>
-    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7' }, expect.any(Function)),
+    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7', enhance: true }, expect.any(Function)),
   )
 })
 

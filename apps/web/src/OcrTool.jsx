@@ -157,6 +157,7 @@ export default function OcrTool() {
   const [options, setOptions] = useState({
     language: LANGUAGES[0].id,
     layout: LAYOUTS[0].id,
+    enhance: false,
   })
   const [showLow, setShowLow] = useState(false)
   const [glossaryText, setGlossaryText] = useState(() => {
@@ -305,8 +306,8 @@ export default function OcrTool() {
     setState((s) => {
       if (!s.regions) return s
       if (!usesRegions(next)) return { ...s, regions: null, status: '' }
-      // Read text depends on the language; boxes stay.
-      if ('language' in patch) {
+      // Read text depends on the language and enhancement; boxes stay.
+      if ('language' in patch || 'enhance' in patch) {
         return { ...s, regions: s.regions.map((r) => ({ ...r, text: undefined, entries: undefined, confidence: undefined })), status: '' }
       }
       return s
@@ -410,6 +411,14 @@ export default function OcrTool() {
                 </select>
               </label>
             )}
+            <label>
+              <input
+                type="checkbox"
+                checked={options.enhance}
+                onChange={(e) => changeOptions({ enhance: e.target.checked })}
+              />{' '}
+              Enhance image (upscale, sharpen contrast)
+            </label>
           </div>
           <details className="glossary">
             <summary>Glossary and corrections{glossaryText ? ' (in use)' : ''}</summary>
