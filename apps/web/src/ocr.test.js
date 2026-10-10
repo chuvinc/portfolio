@@ -5,6 +5,7 @@ const confidence = {} // what the fake engine reports per model
 const attempts = [] // models tried, in order
 const modes = [] // [model, layout mode] for every read
 const params = [] // [model, all parameters] for every read
+const variantConf = {} // confidence override when the crop was isolated ('dark' / 'light')
 
 vi.mock('./regions', () => ({
   cropRegion: vi.fn(async (_image, box) => {
@@ -17,7 +18,10 @@ vi.mock('./regions', () => ({
 }))
 vi.mock('./layout', () => ({ inferLayout: vi.fn() }))
 // A contrast boost tags the crop so the test can see it was applied; 1 (no change) passes through.
-vi.mock('./preprocess', () => ({ contrastImage: vi.fn(async (image, factor) => (factor > 1 ? `${image}+contrast${factor}` : image)) }))
+vi.mock('./preprocess', () => ({
+  contrastImage: vi.fn(async (image, factor) => (factor > 1 ? `${image}+contrast${factor}` : image)),
+  isolateInk: vi.fn(async (image, mode) => `${image}+${mode}`),
+}))
 vi.mock('tesseract.js', () => ({
   PSM: { AUTO: '3', SINGLE_BLOCK: '6', SINGLE_COLUMN: '4', SINGLE_LINE: '7', SPARSE_TEXT: '11', SINGLE_BLOCK_VERT_TEXT: '5' },
   createWorker: vi.fn(async (lang) => ({
@@ -28,7 +32,8 @@ vi.mock('tesseract.js', () => ({
     // Echoes the model and crop so the test can see what was read, and in what order.
     recognize: vi.fn(async (crop) => {
       attempts.push(lang)
-      return { data: { text: `[${lang}:${crop}]`, confidence: confidence[lang] } }
+      const variant = ['dark', 'light'].find((m) => String(crop).includes(`+${m}`))
+      return { data: { text: `[${lang}:${crop}]`, confidence: variant && variantConf[variant] !== undefined ? variantConf[variant] : confidence[lang] } }
     }),
     terminate: vi.fn(),
   })),
@@ -46,6 +51,7 @@ beforeEach(() => {
   attempts.length = 0
   modes.length = 0
   params.length = 0
+  for (const k of Object.keys(variantConf)) delete variantConf[k]
   onVerticalText()
 })
 
@@ -186,4 +192,27 @@ test('detection sees the contrast-adjusted picture too', async () => {
   expect(detectRegions).toHaveBeenLastCalledWith('page+contrast2', 'normal')
   await findTextRegions('page', 'normal')
   expect(detectRegions).toHaveBeenLastCalledWith('page', 'normal')
+})
+
+test('a weak read is retried with the ink isolated, and the most confident read wins', async () => {
+  Object.assign(confidence, { jpn_vert: 20, jpn: 10 }) // the plain read is hopeless (outlined text)
+  variantConf.dark = 88
+  variantConf.light = 30
+  const result = await read(horizontalLine)
+  expect(result.ink).toBe('dark')
+  expect(result.text).toContain('+dark')
+  expect(result.confidence).toBeGreaterThan(20) // better than the plain read's 20
+})
+
+test('a confident read is not retried', async () => {
+  const result = await read(horizontalLine) // vertical text: 90% sure
+  expect(result.ink).toBeUndefined()
+  expect(attempts).toHaveLength(2) // one read per direction, nothing more
+})
+
+test("a region's own contrast overrides the page's", async () => {
+  const own = await readRegions(new Blob(['x']), [{ ...horizontalLine, contrast: 250 }], { language: 'jpn', contrast: 100 })
+  expect(own[0].text).toContain('+contrast2.5')
+  const page = await readRegions(new Blob(['x']), [horizontalLine], { language: 'jpn', contrast: 150 })
+  expect(page[0].text).toContain('+contrast1.5')
 })

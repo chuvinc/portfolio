@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { adjustContrast, binarize, meanBrightness } from './preprocess'
+import { adjustContrast, binarize, isolateInkPixels, meanBrightness } from './preprocess'
 
 // Builds RGBA pixel data from a list of gray values.
 const image = (grays) => ({
@@ -47,4 +47,18 @@ test('adjustContrast with factor 1 changes nothing, and values stay within 0-255
   adjustContrast(img, 10)
   expect(Math.min(...values(img))).toBeGreaterThanOrEqual(0)
   expect(Math.max(...values(img))).toBeLessThanOrEqual(255)
+})
+
+test('isolateInkPixels keeps only the darkest pixels for black text with a white outline', () => {
+  // black fill (0), white outline (255), grey background (128)
+  const img = image([128, 255, 0, 255, 128, 128, 0, 0])
+  isolateInkPixels(img, 'dark')
+  expect(values(img)).toEqual([255, 255, 0, 255, 255, 255, 0, 0]) // only the black pixels are ink
+})
+
+test('isolateInkPixels keeps only the lightest pixels for white text with a black outline', () => {
+  // white fill (255), black outline (0), grey background (128)
+  const img = image([128, 0, 255, 0, 128, 128, 255, 255])
+  isolateInkPixels(img, 'light')
+  expect(values(img)).toEqual([255, 255, 0, 255, 255, 255, 0, 0])
 })

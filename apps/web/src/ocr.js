@@ -2,7 +2,7 @@ import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
 import { japaneseWhitelist } from './charset'
 import { cleanEntries, entriesFromData, entriesToText } from './postprocess'
-import { contrastImage } from './preprocess'
+import { contrastImage, isolateInk } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
 export { classifyRegion }
@@ -12,6 +12,7 @@ export const REGIONS_LAYOUT = 'regions'
 // Regions the engine is less sure of than this look like ghost text. Text-free artwork (screentone,
 // hatching, linework) read at a median of 0 and almost never reached 60, while real text read ~90.
 export const MIN_CONFIDENCE = 50
+const RETRY_BELOW = 65 // a weaker read than this is retried with the text isolated from its outline/background
 const OVERSHOOT = 1.6 // more characters than this many times a box's capacity can't be real text
 export const LAYOUTS = [
   { id: AUTO_LAYOUT, label: 'Automatic' },
@@ -127,18 +128,23 @@ export async function findTextRegions(image, sensitivity, contrast = 100) {
 }
 
 // Reads each region on its own. Japanese is read both ways and the believable one kept (see
-// chooseDirection). Resolves to [{ id, text, entries, confidence, language }],
+// chooseDirection). A weak read is retried with just the darkest, then just the lightest, pixels kept
+// (outlined text), and the most confident read wins. A region's own `contrast` overrides the page's.
+// Resolves to [{ id, text, entries, confidence, language, ink }],
 // where `entries` are the characters with their confidence (see postprocess.js).
 // Regions need { id, x, y, w, h, direction, lines, psm }.
 export async function readRegions(image, regions, { language = 'eng', contrast = 100, allowLatin = false } = {}, onProgress) {
   const pool = workerPool()
   const results = []
+  let regionContrast = contrast // the contrast of the region being read
+  let ink = null // null = read as is; 'dark' / 'light' = isolate that ink first
 
   const read = async (lang, psm, box, unit) => {
     const worker = await pool.get(lang)
     await worker.setParameters({ tessedit_pageseg_mode: psm, ...charsetFor(lang, allowLatin) })
     let crop = await cropRegion(image, box, upscaleFor(unit))
-    crop = await contrastImage(crop, contrast / 100)
+    crop = await contrastImage(crop, regionContrast / 100)
+    if (ink) crop = await isolateInk(crop, ink)
     const { data } = await worker.recognize(crop, {}, { text: true, blocks: true })
     return { entries: entriesFromData(data), confidence: data.confidence }
   }
@@ -159,30 +165,41 @@ export async function readRegions(image, regions, { language = 'eng', contrast =
     }
   }
 
+  // One complete read of a region (both directions for Japanese) with the current contrast and ink.
+  const readOnce = async (region) => {
+    if (language !== 'jpn') return finish({ ...(await read(language, region.psm, region, region)), language })
+    const unit = (direction, lines) => ({ ...region, direction, lines })
+    return finish(
+      await readJapanese(
+        {
+          vertical: () =>
+            region.columns?.length > 1
+              ? readColumns(region)
+              : read('jpn_vert', PSM.SINGLE_BLOCK_VERT_TEXT, region, unit('vertical', region.direction === 'vertical' ? region.lines : 1)),
+          horizontal: () => read('jpn', horizontalPsm(region.lines), region, unit('horizontal', region.direction === 'horizontal' ? region.lines : 1)),
+        },
+        region.direction,
+      ),
+    )
+  }
+
   try {
     for (const [i, region] of regions.entries()) {
       onProgress?.({ status: `reading region ${i + 1} of ${regions.length}`, progress: i / regions.length })
-      let best
-      if (language === 'jpn') {
-        const unit = (direction, lines) => ({ ...region, direction, lines })
-        best = finish(
-          await readJapanese(
-            {
-              vertical: () =>
-                region.columns?.length > 1
-                  ? readColumns(region)
-                  : read('jpn_vert', PSM.SINGLE_BLOCK_VERT_TEXT, region, unit('vertical', region.direction === 'vertical' ? region.lines : 1)),
-              horizontal: () => read('jpn', horizontalPsm(region.lines), region, unit('horizontal', region.direction === 'horizontal' ? region.lines : 1)),
-            },
-            region.direction,
-          ),
-        )
-      } else {
-        best = finish({ ...(await read(language, region.psm, region, region)), language })
+      regionContrast = region.contrast ?? contrast
+      ink = null
+      let best = await readOnce(region)
+      if (best.confidence < RETRY_BELOW) {
+        for (const mode of ['dark', 'light']) {
+          ink = mode
+          const alternative = await readOnce(region)
+          if (alternative.confidence > best.confidence) best = { ...alternative, ink: mode }
+        }
+        ink = null
       }
       const characters = Array.from(best.text).filter((ch) => ch.trim()).length
       const confidence = plausibleConfidence(best.confidence, characters, expectedGlyphs(region, best.direction ?? region.direction))
-      results.push({ id: region.id, text: best.text, entries: best.entries, confidence, language: best.language })
+      results.push({ id: region.id, text: best.text, entries: best.entries, confidence, language: best.language, ink: best.ink })
     }
   } finally {
     await pool.close()

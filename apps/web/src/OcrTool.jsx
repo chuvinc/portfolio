@@ -22,14 +22,21 @@ const IDLE = {
   entries: null, // whole-image reads: characters with confidence, for the glossary
   detected: null,
   regions: null, // text groups on the page, in image pixels (region mode only)
+  activeId: null, // the box being inspected, which can have its own contrast
   page: null,
   brightness: 128, // the picture's average brightness, the pivot for the contrast preview
+  natural: null, // the picture's own width and height, to size the preview
   status: '',
   progress: 0,
   error: null,
 }
 
 const GLOSSARY_KEY = 'ocr-glossary' // kept in this browser only, never sent anywhere
+
+// As large as fits: the full width, but never taller than 85% of the window, so a tall narrow
+// picture isn't stretched to thousands of pixels high.
+const previewSize = (natural) =>
+  natural?.w && natural?.h ? { width: `min(100%, ${(85 * natural.w) / natural.h}vh)` } : undefined
 
 const MIN_DRAG = 0.01 // smallest box you can draw, as a share of the image
 const clamp = (n) => Math.min(1, Math.max(0, n))
@@ -57,7 +64,7 @@ function regionText(regions, page, language, showLow, glossary) {
 
 // Boxes over the preview. A short press toggles the smallest box under the pointer;
 // dragging draws a new box, even on top of existing ones.
-function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
+function RegionOverlay({ regions, page, showLow, activeId, onToggle, onAdd }) {
   const [drag, setDrag] = useState(null)
   const dragged = useRef(false) // a drag ends with a click event we must ignore
 
@@ -128,7 +135,7 @@ function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
       {painted.map((r) => (
         <div
           key={r.id}
-          className={`region ${kind(r)}`}
+          className={`region ${kind(r)}${r.id === activeId ? ' active' : ''}`}
           style={{
             left: pct(r.x, page.width),
             top: pct(r.y, page.height),
@@ -156,11 +163,11 @@ function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
 
 // The contrast applied to the preview, as an SVG filter so it matches what gets read:
 // out = (in - brightness) * factor + brightness, per colour channel.
-function ContrastFilter({ factor, brightness }) {
+function ContrastFilter({ id, factor, brightness }) {
   const intercept = (brightness * (1 - factor)) / 255
   return (
     <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}>
-      <filter id="contrast-preview" colorInterpolationFilters="sRGB">
+      <filter id={id} colorInterpolationFilters="sRGB">
         <feComponentTransfer>
           <feFuncR type="linear" slope={factor} intercept={intercept} />
           <feFuncG type="linear" slope={factor} intercept={intercept} />
@@ -168,6 +175,53 @@ function ContrastFilter({ factor, brightness }) {
         </feComponentTransfer>
       </filter>
     </svg>
+  )
+}
+
+// A close-up of one box with its own contrast slider, for text that needs a different setting from
+// the rest of the page (faded caption, outlined sound effect). Leaving it alone uses the page's.
+function BoxInspector({ region, page, imageUrl, brightness, pageContrast, onContrast }) {
+  const effective = region.contrast ?? pageContrast
+  const scale = Math.min(3, 320 / Math.max(region.w, region.h))
+  return (
+    <div className="inspector">
+      <ContrastFilter id="contrast-box" factor={effective / 100} brightness={brightness} />
+      <div
+        className="closeup"
+        role="img"
+        aria-label={`Close-up of box ${region.id}`}
+        style={{
+          width: region.w * scale,
+          height: region.h * scale,
+          backgroundImage: `url(${imageUrl})`,
+          backgroundSize: `${page.width * scale}px ${page.height * scale}px`,
+          backgroundPosition: `${-region.x * scale}px ${-region.y * scale}px`,
+          filter: effective > 100 ? 'url(#contrast-box)' : undefined,
+        }}
+      />
+      <div className="inspector-controls">
+        <strong>Box #{region.id}</strong>
+        <label>
+          Contrast for this box{' '}
+          <input
+            type="range"
+            min={100}
+            max={300}
+            step={10}
+            value={effective}
+            onChange={(e) => onContrast(Number(e.target.value))}
+            aria-label="Contrast for this box"
+          />{' '}
+          {effective}%
+        </label>
+        {region.contrast !== undefined && (
+          <button type="button" onClick={() => onContrast(undefined)}>
+            Use the page setting ({pageContrast}%)
+          </button>
+        )}
+        <span className="hint">Changing it means this box is read again.</span>
+      </div>
+    </div>
   )
 }
 
@@ -280,7 +334,7 @@ export default function OcrTool() {
       const { regions, page } = await findTextRegions(state.image, sensitivity, options.contrast)
       nextRegionId.current = regions.length + 1
       const found = regions.map((r, i) => ({ ...r, id: i + 1, included: false }))
-      return () => ({ regions: found, page, status: '' })
+      return () => ({ regions: found, page, activeId: null, status: '' })
     })
 
   const readNow = (regions) =>
@@ -307,7 +361,16 @@ export default function OcrTool() {
   }
 
   const toggleRegion = (id) =>
-    setState((s) => ({ ...s, regions: s.regions.map((r) => (r.id === id ? { ...r, included: !r.included } : r)) }))
+    setState((s) => ({ ...s, activeId: id, regions: s.regions.map((r) => (r.id === id ? { ...r, included: !r.included } : r)) }))
+
+  // Sets one box's own contrast (undefined = follow the page) and clears what was read from it.
+  const setRegionContrast = (id, value) =>
+    setState((s) => ({
+      ...s,
+      regions: s.regions.map((r) =>
+        r.id === id ? { ...r, contrast: value, text: undefined, entries: undefined, confidence: undefined, ink: undefined } : r,
+      ),
+    }))
 
   const setAllRegions = (included) =>
     setState((s) => ({ ...s, regions: s.regions.map((r) => ({ ...r, included })) }))
@@ -318,7 +381,7 @@ export default function OcrTool() {
       const info = await classifyRegion(state.image, box)
       if (run.current !== id) return
       const region = { ...box, ...info, id: nextRegionId.current++, included: true }
-      setState((s) => ({ ...s, regions: [...s.regions, region] }))
+      setState((s) => ({ ...s, activeId: region.id, regions: [...s.regions, region] }))
     } catch {
       // A box we can't analyse is simply not added.
     }
@@ -339,6 +402,7 @@ export default function OcrTool() {
   }
 
   const regionMode = usesRegions(options)
+  const activeRegion = state.regions?.find((r) => r.id === state.activeId)
   const busy = state.status && state.status !== 'done'
   const pending = state.regions?.filter((r) => r.included && r.text === undefined).length ?? 0
   const regionsRead = state.regions?.some((r) => r.text !== undefined)
@@ -379,19 +443,21 @@ export default function OcrTool() {
 
       {state.previewUrl && (
         <>
-          <div className="previewBox">
+          <div className="previewBox" style={previewSize(state.natural)}>
             <img
               className="preview"
               src={state.previewUrl}
               alt="Selected for text extraction"
+              onLoad={(e) => setState((s) => ({ ...s, natural: { w: e.target.naturalWidth, h: e.target.naturalHeight } }))}
               style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
             />
-            <ContrastFilter factor={options.contrast / 100} brightness={state.brightness} />
+            <ContrastFilter id="contrast-preview" factor={options.contrast / 100} brightness={state.brightness} />
             {regionMode && state.regions && (
               <RegionOverlay
                 regions={state.regions}
                 page={state.page}
                 showLow={showLow}
+                activeId={state.activeId}
                 onToggle={toggleRegion}
                 onAdd={addRegion}
               />
@@ -403,6 +469,16 @@ export default function OcrTool() {
               that really contain text to turn them green. Drag anywhere to draw your own box, even
               over an existing one. Then read the green regions.
             </p>
+          )}
+          {regionMode && activeRegion && (
+            <BoxInspector
+              region={activeRegion}
+              page={state.page}
+              imageUrl={state.previewUrl}
+              brightness={state.brightness}
+              pageContrast={options.contrast}
+              onContrast={(value) => setRegionContrast(activeRegion.id, value)}
+            />
           )}
           <div className="options">
             <label>

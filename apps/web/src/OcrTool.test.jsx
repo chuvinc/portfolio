@@ -214,3 +214,31 @@ test('the contrast slider previews live and can be reset', async () => {
   expect(preview.style.filter).toBe('')
   expect(screen.queryByText('Reset')).toBeNull()
 })
+
+test('clicking a box opens a close-up with its own contrast slider, used when that box is read', async () => {
+  const el = await findRegionsMode()
+  expect(screen.queryByLabelText('Contrast for this box')).toBeNull() // no box selected yet
+
+  clickAt(el, 150, 120) // the first box
+  const slider = await screen.findByLabelText('Contrast for this box')
+  expect(screen.getByText('Box #1')).toBeTruthy()
+  expect(slider.value).toBe('100') // starts at the page setting
+
+  fireEvent.change(slider, { target: { value: '220' } })
+  expect(screen.getByText(/Use the page setting/)).toBeTruthy()
+  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+
+  await waitFor(() => expect(readRegions).toHaveBeenCalled())
+  const sent = readRegions.mock.calls.at(-1)[1]
+  expect(sent.find((r) => r.id === 1).contrast).toBe(220) // this box has its own contrast
+  expect(sent.find((r) => r.id === 2).contrast).toBeUndefined() // the other follows the page
+})
+
+test("a box's own contrast can be reset to follow the page again", async () => {
+  const el = await findRegionsMode()
+  clickAt(el, 150, 120)
+  fireEvent.change(await screen.findByLabelText('Contrast for this box'), { target: { value: '200' } })
+  fireEvent.click(screen.getByText(/Use the page setting/))
+  expect(screen.queryByText(/Use the page setting/)).toBeNull()
+  expect(screen.getByLabelText('Contrast for this box').value).toBe('100')
+})

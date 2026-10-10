@@ -270,3 +270,36 @@ footer {
   font-size: 14px;
   color: var(--text);
 }
+
+.region.active {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.inspector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+}
+
+.closeup {
+  flex: none;
+  border: 1px solid var(--border);
+  background-repeat: no-repeat;
+}
+
+.inspector-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.inspector-controls input[type='range'] {
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
