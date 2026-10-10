@@ -58,12 +58,11 @@ test('ignores non-image files', () => {
   expect(screen.queryByText('Extract text')).toBeNull()
 })
 
-test('passes the chosen language, layout and enhance options to OCR', async () => {
+test('passes the chosen layout and enhance options to OCR, with Japanese as the language', async () => {
   render(<OcrTool />)
   pick()
 
-  fireEvent.change(await screen.findByLabelText(/Language/), { target: { value: 'jpn' } })
-  fireEvent.change(screen.getByLabelText(/Text layout/), { target: { value: '7' } })
+  fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: '7' } })
   fireEvent.click(screen.getByLabelText(/Enhance image/))
   fireEvent.click(screen.getByText('Extract text'))
 
@@ -144,9 +143,9 @@ test('region mode: "Read all" switches every box on and hides the unsure ones', 
   expect(kinds.sort()).toEqual(['low', 'on']) // region 2 was only 20% sure, so it is hidden
 })
 
-test('the language dropdown is just English and Japanese', () => {
+test('the language dropdown offers Japanese', () => {
   render(<OcrTool />)
   pick()
   const options = [...screen.getByLabelText(/Language/).querySelectorAll('option')].map((o) => o.textContent)
-  expect(options).toEqual(['English', 'Japanese'])
+  expect(options).toEqual(['Japanese'])
 })
