@@ -23,6 +23,7 @@ const IDLE = {
   detected: null,
   regions: null, // text groups on the page, in image pixels (region mode only)
   activeId: null, // the box being inspected, which can have its own contrast
+  selected: [], // ids of boxes picked for a bulk action (delete, switch on/off, contrast)
   page: null,
   brightness: 128, // the picture's average brightness, the pivot for the contrast preview
   edit: null, // text the user rewrote by hand: { from: the text it was made from, text }
@@ -57,9 +58,16 @@ function regionText(regions, page, language, showLow, glossary) {
   return { entries, text: entries.map((e) => e.ch).join(''), fixed: parts.reduce((n, p) => n + p.fixed, 0) }
 }
 
+// What a box is doing: 'off' (not read), 'low' (read, but the engine was unsure) or 'on'.
+const boxKind = (r, showLow) => {
+  if (!r.included) return 'off'
+  if (r.text !== undefined && !showLow && r.confidence < MIN_CONFIDENCE) return 'low'
+  return 'on'
+}
+
 // Boxes over the preview. A short press toggles the smallest box under the pointer;
 // dragging draws a new box, even on top of existing ones.
-function RegionOverlay({ regions, page, showLow, activeId, onToggle, onAdd }) {
+function RegionOverlay({ regions, page, showLow, activeId, selected, onToggle, onSelect, onAdd, onExpand }) {
   const [drag, setDrag] = useState(null)
   const dragged = useRef(false) // a drag ends with a click event we must ignore
 
@@ -97,13 +105,19 @@ function RegionOverlay({ regions, page, showLow, activeId, onToggle, onAdd }) {
     const hit = regions
       .filter((r) => px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h)
       .sort((a, b) => a.w * a.h - b.w * b.h)[0]
-    if (hit) onToggle(hit.id)
+    if (!hit) return
+    // Ctrl/Cmd-click picks boxes for a bulk action; a plain click switches the box on or off.
+    if (e.ctrlKey || e.metaKey) onSelect(hit.id)
+    else onToggle(hit.id)
   }
 
-  const kind = (r) => {
-    if (!r.included) return 'off'
-    if (r.text !== undefined && !showLow && r.confidence < MIN_CONFIDENCE) return 'low'
-    return 'on'
+  // Double-clicking empty space expands the picture. On a box it does nothing extra (two clicks
+  // just switch it on and off again), so double-clicking a box never moves the layout.
+  const expandAt = (e) => {
+    const { x, y } = point(e)
+    const px = x * page.width
+    const py = y * page.height
+    if (!regions.some((r) => px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h)) onExpand()
   }
 
   // Biggest first, so small boxes paint on top of the ones containing them.
@@ -126,11 +140,12 @@ function RegionOverlay({ regions, page, showLow, activeId, onToggle, onAdd }) {
       onPointerUp={finishDrag}
       onPointerCancel={() => setDrag(null)}
       onClick={toggleAt}
+      onDoubleClick={expandAt}
     >
       {painted.map((r) => (
         <div
           key={r.id}
-          className={`region ${kind(r)}${r.id === activeId ? ' active' : ''}`}
+          className={`region ${boxKind(r, showLow)}${r.id === activeId ? ' active' : ''}${selected.includes(r.id) ? ' selected' : ''}`}
           style={{
             left: pct(r.x, page.width),
             top: pct(r.y, page.height),
@@ -170,6 +185,77 @@ function ContrastFilter({ id, factor, brightness }) {
         </feComponentTransfer>
       </filter>
     </svg>
+  )
+}
+
+// Every box in a list, to pick several and act on them together.
+function BoxList({ regions, selected, activeId, showLow, pageContrast, onPick, onSelectAll, onSelectNone, onActivate, onTurn, onDelete, onContrast }) {
+  const [bulk, setBulk] = useState(pageContrast)
+  const word = { on: 'on', off: 'off', low: 'unsure' }
+  return (
+    <div className="boxlist">
+      <div className="boxlist-head">
+        <strong>Boxes ({regions.length})</strong>
+        <button type="button" onClick={onSelectAll}>
+          Select all
+        </button>
+        <button type="button" onClick={onSelectNone} disabled={selected.length === 0}>
+          Select none
+        </button>
+      </div>
+      <ul>
+        {[...regions]
+          .sort((a, b) => a.id - b.id)
+          .map((r) => (
+            <li key={r.id} className={r.id === activeId ? 'active' : ''} onClick={() => onActivate(r.id)}>
+              <label onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(r.id)}
+                  onChange={() => onPick(r.id)}
+                  aria-label={`Select box ${r.id}`}
+                />{' '}
+              </label>
+              <span>
+                #{r.id} · {r.direction} · {word[boxKind(r, showLow)]}
+                {r.confidence !== undefined && ` · ${Math.round(r.confidence)}%`}
+              </span>
+            </li>
+          ))}
+      </ul>
+      {selected.length > 0 && (
+        <div className="bulk">
+          <strong>{selected.length} selected</strong>
+          <div className="actions">
+            <button type="button" onClick={() => onTurn(true)}>
+              Turn on
+            </button>
+            <button type="button" onClick={() => onTurn(false)}>
+              Turn off
+            </button>
+            <button type="button" className="danger" onClick={onDelete}>
+              Delete selected
+            </button>
+          </div>
+          <label>
+            Contrast for selected{' '}
+            <input
+              type="range"
+              min={100}
+              max={300}
+              step={10}
+              value={bulk}
+              onChange={(e) => {
+                setBulk(Number(e.target.value))
+                onContrast(Number(e.target.value))
+              }}
+              aria-label="Contrast for selected boxes"
+            />{' '}
+            {bulk}%
+          </label>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -232,6 +318,7 @@ export default function OcrTool() {
     allowLatin: false,
   })
   const [showLow, setShowLow] = useState(false)
+  const [expanded, setExpanded] = useState(false) // false: picture on the left, controls beside it
   const [editing, setEditing] = useState(false) // the text box for rewriting the result by hand is open
   const [draft, setDraft] = useState('')
   const [glossaryText, setGlossaryText] = useState(() => {
@@ -335,7 +422,7 @@ export default function OcrTool() {
       const { regions, page } = await findTextRegions(state.image, sensitivity, options.contrast)
       nextRegionId.current = regions.length + 1
       const found = regions.map((r, i) => ({ ...r, id: i + 1, included: false }))
-      return () => ({ regions: found, page, activeId: null, status: '' })
+      return () => ({ regions: found, page, activeId: null, selected: [], status: '' })
     })
 
   const readNow = (regions) =>
@@ -365,15 +452,28 @@ export default function OcrTool() {
     setState((s) => ({ ...s, activeId: id, regions: s.regions.map((r) => (r.id === id ? { ...r, included: !r.included } : r)) }))
 
   // Removes a box entirely (its text leaves the result too).
-  const deleteRegion = (id) =>
-    setState((s) => ({ ...s, activeId: null, regions: s.regions.filter((r) => r.id !== id) }))
+  const deleteRegions = (ids) =>
+    setState((s) => ({
+      ...s,
+      activeId: ids.includes(s.activeId) ? null : s.activeId,
+      selected: s.selected.filter((id) => !ids.includes(id)),
+      regions: s.regions.filter((r) => !ids.includes(r.id)),
+    }))
+
+  const toggleSelect = (id) =>
+    setState((s) => ({ ...s, selected: s.selected.includes(id) ? s.selected.filter((x) => x !== id) : [...s.selected, id] }))
+
+  const setSelection = (ids) => setState((s) => ({ ...s, selected: ids }))
+
+  const setIncluded = (ids, included) =>
+    setState((s) => ({ ...s, regions: s.regions.map((r) => (ids.includes(r.id) ? { ...r, included } : r)) }))
 
   // Sets one box's own contrast (undefined = follow the page) and clears what was read from it.
-  const setRegionContrast = (id, value) =>
+  const setRegionsContrast = (ids, value) =>
     setState((s) => ({
       ...s,
       regions: s.regions.map((r) =>
-        r.id === id ? { ...r, contrast: value, text: undefined, entries: undefined, confidence: undefined, ink: undefined } : r,
+        ids.includes(r.id) ? { ...r, contrast: value, text: undefined, entries: undefined, confidence: undefined, ink: undefined } : r,
       ),
     }))
 
@@ -408,6 +508,7 @@ export default function OcrTool() {
 
   const regionMode = usesRegions(options)
   const activeRegion = state.regions?.find((r) => r.id === state.activeId)
+  const selectedIds = state.selected.filter((id) => state.regions?.some((r) => r.id === id))
   const busy = state.status && state.status !== 'done'
   const pending = state.regions?.filter((r) => r.included && r.text === undefined).length ?? 0
   const regionsRead = state.regions?.some((r) => r.text !== undefined)
@@ -452,112 +553,183 @@ export default function OcrTool() {
 
       {state.previewUrl && (
         <>
-          <div className="previewBox">
-            <img
-              className="preview"
-              src={state.previewUrl}
-              alt="Selected for text extraction"
-              style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
-            />
-            <ContrastFilter id="contrast-preview" factor={options.contrast / 100} brightness={state.brightness} />
-            {regionMode && state.regions && (
-              <RegionOverlay
-                regions={state.regions}
-                page={state.page}
-                showLow={showLow}
-                activeId={state.activeId}
-                onToggle={toggleRegion}
-                onAdd={addRegion}
-              />
-            )}
-          </div>
-          {regionMode && state.regions && (
-            <p className="status">
-              Found {state.regions.length} candidate boxes, all switched off (red). Click the ones
-              that really contain text to turn them green. Drag anywhere to draw your own box, even
-              over an existing one. Then read the green regions.
-            </p>
-          )}
-          {regionMode && activeRegion && (
-            <BoxInspector
-              region={activeRegion}
-              page={state.page}
-              imageUrl={state.previewUrl}
-              brightness={state.brightness}
-              pageContrast={options.contrast}
-              onContrast={(value) => setRegionContrast(activeRegion.id, value)}
-              onDelete={() => deleteRegion(activeRegion.id)}
-            />
-          )}
-          <div className="options">
-            <label>
-              Language{' '}
-              <select
-                value={options.language}
-                onChange={(e) => changeOptions({ language: e.target.value })}
-              >
-                {LANGUAGES.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Text layout{' '}
-              <select
-                value={options.layout}
-                onChange={(e) => changeOptions({ layout: e.target.value })}
-              >
-                {LAYOUTS.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {regionMode && (
-              <label>
-                Detection{' '}
-                <select value={sensitivity} onChange={(e) => setSensitivity(e.target.value)}>
-                  <option value="strict">Strict (fewer boxes)</option>
-                  <option value="normal">Normal</option>
-                  <option value="loose">Loose (more boxes)</option>
-                </select>
-              </label>
-            )}
-            <label className="contrast">
-              Contrast{' '}
-              <input
-                type="range"
-                min={100}
-                max={300}
-                step={10}
-                value={options.contrast}
-                onChange={(e) => changeOptions({ contrast: Number(e.target.value) })}
-                aria-label="Contrast"
-              />{' '}
-              {options.contrast}%
-              {options.contrast !== 100 && (
-                <>
-                  {' '}
-                  <button type="button" onClick={() => changeOptions({ contrast: 100 })}>
-                    Reset
-                  </button>
-                </>
-              )}
-            </label>
+          <div className="viewbar">
+            <button type="button" onClick={() => setExpanded((e) => !e)}>
+              {expanded ? 'Shrink image' : 'Expand image'}
+            </button>
             <span className="hint">
-              Raise it for faded or grey pages (about 200–250% works best); normal pages don't need it. Use Find again after changing it.
+              {expanded
+                ? 'The controls are below the picture.'
+                : 'Double-click empty space on the picture to expand it.'}
             </span>
-            <label>
-              <input
-                type="checkbox"
-                checked={options.allowLatin}
-                onChange={(e) => changeOptions({ allowLatin: e.target.checked })}
-              />{' '}
-              Allow English letters and numbers
-            </label>
+          </div>
+          <div className={`workspace${expanded ? ' expanded' : ''}`}>
+            <div className="stage">
+              <div className="previewBox">
+                <img
+                  className="preview"
+                  src={state.previewUrl}
+                  alt="Selected for text extraction"
+                  style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
+                  onDoubleClick={() => setExpanded((e) => !e)}
+                />
+                <ContrastFilter id="contrast-preview" factor={options.contrast / 100} brightness={state.brightness} />
+                {regionMode && state.regions && (
+                  <RegionOverlay
+                    regions={state.regions}
+                    page={state.page}
+                    showLow={showLow}
+                    activeId={state.activeId}
+                    selected={selectedIds}
+                    onToggle={toggleRegion}
+                    onSelect={toggleSelect}
+                    onAdd={addRegion}
+                    onExpand={() => setExpanded((e) => !e)}
+                  />
+                )}
+              </div>
+            </div>
+            <div className="sidebar">
+              <div className="actions">
+                {!regionMode && (
+                  <button type="button" onClick={extract} disabled={busy}>
+                    Extract text
+                  </button>
+                )}
+                {regionMode && !state.regions && (
+                  <button type="button" onClick={findRegions} disabled={busy}>
+                    Find text regions
+                  </button>
+                )}
+                {regionMode && state.regions && (
+                  <>
+                    <button type="button" onClick={readPending} disabled={busy || pending === 0}>
+                      Read {pending} region{pending === 1 ? '' : 's'}
+                    </button>
+                    <button type="button" onClick={readAll} disabled={busy}>
+                      Read all (hide unsure)
+                    </button>
+                    <button type="button" onClick={() => setAllRegions(true)} disabled={busy}>
+                      All on
+                    </button>
+                    <button type="button" onClick={() => setAllRegions(false)} disabled={busy}>
+                      All off
+                    </button>
+                    <button type="button" onClick={findRegions} disabled={busy}>
+                      Find again
+                    </button>
+                  </>
+                )}
+                <button type="button" onClick={clear}>
+                  Clear
+                </button>
+              </div>
+              {regionMode && state.regions && (
+                <p className="status">
+                  Found {state.regions.length} candidate boxes, all switched off (red). Click the ones
+                  that really contain text to turn them green. Drag anywhere to draw your own box, even
+                  over an existing one. Ctrl-click (Cmd on a Mac) picks boxes for a bulk action.
+                  Then read the green regions.
+                </p>
+              )}
+              {regionMode && activeRegion && (
+                <BoxInspector
+                  region={activeRegion}
+                  page={state.page}
+                  imageUrl={state.previewUrl}
+                  brightness={state.brightness}
+                  pageContrast={options.contrast}
+                  onContrast={(value) => setRegionsContrast([activeRegion.id], value)}
+                  onDelete={() => deleteRegions([activeRegion.id])}
+                />
+              )}
+              {regionMode && state.regions && (
+                <BoxList
+                  regions={state.regions}
+                  selected={selectedIds}
+                  activeId={state.activeId}
+                  showLow={showLow}
+                  pageContrast={options.contrast}
+                  onPick={toggleSelect}
+                  onSelectAll={() => setSelection(state.regions.map((r) => r.id))}
+                  onSelectNone={() => setSelection([])}
+                  onActivate={(id) => setState((s) => ({ ...s, activeId: id }))}
+                  onTurn={(included) => setIncluded(selectedIds, included)}
+                  onDelete={() => deleteRegions(selectedIds)}
+                  onContrast={(value) => setRegionsContrast(selectedIds, value)}
+                />
+              )}
+              <div className="options">
+                <label>
+                  Language{' '}
+                  <select
+                    value={options.language}
+                    onChange={(e) => changeOptions({ language: e.target.value })}
+                  >
+                    {LANGUAGES.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Text layout{' '}
+                  <select
+                    value={options.layout}
+                    onChange={(e) => changeOptions({ layout: e.target.value })}
+                  >
+                    {LAYOUTS.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {regionMode && (
+                  <label>
+                    Detection{' '}
+                    <select value={sensitivity} onChange={(e) => setSensitivity(e.target.value)}>
+                      <option value="strict">Strict (fewer boxes)</option>
+                      <option value="normal">Normal</option>
+                      <option value="loose">Loose (more boxes)</option>
+                    </select>
+                  </label>
+                )}
+                <label className="contrast">
+                  Contrast{' '}
+                  <input
+                    type="range"
+                    min={100}
+                    max={300}
+                    step={10}
+                    value={options.contrast}
+                    onChange={(e) => changeOptions({ contrast: Number(e.target.value) })}
+                    aria-label="Contrast"
+                  />{' '}
+                  {options.contrast}%
+                  {options.contrast !== 100 && (
+                    <>
+                      {' '}
+                      <button type="button" onClick={() => changeOptions({ contrast: 100 })}>
+                        Reset
+                      </button>
+                    </>
+                  )}
+                </label>
+                <span className="hint">
+                  Raise it for faded or grey pages (about 200–250% works best); normal pages don't need it. Use Find again after changing it.
+                </span>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={options.allowLatin}
+                    onChange={(e) => changeOptions({ allowLatin: e.target.checked })}
+                  />{' '}
+                  Allow English letters and numbers
+                </label>
+              </div>
+            </div>
           </div>
           <details className="glossary">
             <summary>Glossary and corrections{glossaryText ? ' (in use)' : ''}</summary>
@@ -582,40 +754,6 @@ export default function OcrTool() {
               </div>
             )}
           </details>
-          <div className="actions">
-            {!regionMode && (
-              <button type="button" onClick={extract} disabled={busy}>
-                Extract text
-              </button>
-            )}
-            {regionMode && !state.regions && (
-              <button type="button" onClick={findRegions} disabled={busy}>
-                Find text regions
-              </button>
-            )}
-            {regionMode && state.regions && (
-              <>
-                <button type="button" onClick={readPending} disabled={busy || pending === 0}>
-                  Read {pending} region{pending === 1 ? '' : 's'}
-                </button>
-                <button type="button" onClick={readAll} disabled={busy}>
-                  Read all (hide unsure)
-                </button>
-                <button type="button" onClick={() => setAllRegions(true)} disabled={busy}>
-                  All on
-                </button>
-                <button type="button" onClick={() => setAllRegions(false)} disabled={busy}>
-                  All off
-                </button>
-                <button type="button" onClick={findRegions} disabled={busy}>
-                  Find again
-                </button>
-              </>
-            )}
-            <button type="button" onClick={clear}>
-              Clear
-            </button>
-          </div>
         </>
       )}
 

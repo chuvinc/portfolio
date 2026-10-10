@@ -303,3 +303,87 @@ test('a hand edit gives way when the text it was made from changes', async () =>
   expect(screen.getByLabelText('Extracted text').textContent).not.toBe('rewritten')
   expect(screen.queryByText(/Edited by hand/)).toBeNull()
 })
+
+test('the picture starts on the left with the controls beside it, and can be expanded', async () => {
+  const el = await findRegionsMode()
+  const workspace = document.querySelector('.workspace')
+  expect(workspace.classList.contains('expanded')).toBe(false)
+  expect(workspace.querySelector('.stage .previewBox')).toBeTruthy() // the picture
+  // the controls are in the sidebar next to it
+  expect(workspace.querySelector('.sidebar').textContent).toContain('Read 0 regions')
+  expect(workspace.querySelector('.sidebar').textContent).toContain('All on')
+  expect(workspace.querySelector('.stage').textContent).not.toContain('All on')
+
+  fireEvent.click(screen.getByText('Expand image'))
+  expect(workspace.classList.contains('expanded')).toBe(true)
+  expect(screen.getByText('Shrink image')).toBeTruthy()
+  fireEvent.click(screen.getByText('Shrink image'))
+  expect(workspace.classList.contains('expanded')).toBe(false)
+  expect(el).toBeTruthy()
+})
+
+test('double-clicking empty space on the picture expands it, but double-clicking a box does not', async () => {
+  const el = await findRegionsMode()
+  const workspace = document.querySelector('.workspace')
+
+  fireEvent.doubleClick(el, { clientX: 150, clientY: 120 }) // on the first box
+  expect(workspace.classList.contains('expanded')).toBe(false)
+
+  fireEvent.doubleClick(el, { clientX: 900, clientY: 700 }) // empty space
+  expect(workspace.classList.contains('expanded')).toBe(true)
+})
+
+test('several boxes can be picked from the list and deleted together', async () => {
+  await findRegionsMode()
+  expect(screen.queryByText('Delete selected')).toBeNull() // nothing picked yet
+
+  fireEvent.click(screen.getByLabelText('Select box 1'))
+  fireEvent.click(screen.getByLabelText('Select box 2'))
+  expect(screen.getByText('2 selected')).toBeTruthy()
+
+  fireEvent.click(screen.getByText('Delete selected'))
+  expect(document.querySelectorAll('.region')).toHaveLength(0)
+  expect(screen.queryByText(/selected/)).toBeNull()
+})
+
+test('only the picked boxes are deleted', async () => {
+  await findRegionsMode()
+  fireEvent.click(screen.getByLabelText('Select box 2'))
+  fireEvent.click(screen.getByText('Delete selected'))
+  expect(document.querySelectorAll('.region')).toHaveLength(1)
+  expect(screen.queryByLabelText('Select box 2')).toBeNull()
+  expect(screen.getByLabelText('Select box 1')).toBeTruthy()
+})
+
+test('Ctrl-click picks a box on the picture without switching it on', async () => {
+  const el = await findRegionsMode()
+  fireEvent.click(el, { clientX: 150, clientY: 120, ctrlKey: true })
+  expect(screen.getByLabelText('Select box 1').checked).toBe(true)
+  const states = [...document.querySelectorAll('.region')].map((b) => b.classList.contains('off'))
+  expect(states).toEqual([true, true]) // both still off: picking is not toggling
+  expect(document.querySelectorAll('.region.selected')).toHaveLength(1)
+})
+
+test('picked boxes can be switched on or off together, and select all / none work', async () => {
+  await findRegionsMode()
+  fireEvent.click(screen.getByText('Select all'))
+  expect(screen.getByText('2 selected')).toBeTruthy()
+  fireEvent.click(screen.getByText('Turn on'))
+  expect(screen.getByText('Read 2 regions')).toBeTruthy()
+  fireEvent.click(screen.getByText('Turn off'))
+  expect(screen.getByText('Read 0 regions')).toBeTruthy()
+  fireEvent.click(screen.getByText('Select none'))
+  expect(screen.queryByText('Delete selected')).toBeNull()
+})
+
+test('contrast can be set for several picked boxes at once', async () => {
+  await findRegionsMode()
+  fireEvent.click(screen.getByLabelText('Select box 1'))
+  fireEvent.change(screen.getByLabelText('Contrast for selected boxes'), { target: { value: '230' } })
+  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+
+  await waitFor(() => expect(readRegions).toHaveBeenCalled())
+  const sent = readRegions.mock.calls.at(-1)[1]
+  expect(sent.find((r) => r.id === 1).contrast).toBe(230)
+  expect(sent.find((r) => r.id === 2).contrast).toBeUndefined()
+})

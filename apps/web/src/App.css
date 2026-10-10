@@ -309,3 +309,105 @@ footer {
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.5);
 }
+
+/* Picture on the left and the controls beside it; "expanded" stacks them (picture on top). */
+.viewbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.workspace.expanded {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace .stage {
+  min-width: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sidebar .actions {
+  flex-wrap: wrap;
+}
+
+/* Beside the picture the controls stay in view while a tall picture scrolls. */
+.workspace:not(.expanded) .sidebar {
+  position: sticky;
+  top: 8px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+@media (max-width: 800px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace:not(.expanded) .sidebar {
+    position: static;
+    max-height: none;
+  }
+}
+
+.region.selected {
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.9);
+}
+
+.boxlist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.boxlist-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.boxlist ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 15px;
+}
+
+.boxlist li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.boxlist li.active {
+  background: var(--accent-bg);
+}
+
+.bulk {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
