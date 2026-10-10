@@ -140,3 +140,20 @@ export async function isolateInk(blob, mode) {
   canvas.width = canvas.height = 0
   return result
 }
+
+// Returns the image stretched horizontally by `factorX` (1 = unchanged, which returns the same Blob).
+// Restores the proportions of squeezed or tall lettering: undoing a 0.6x squeeze took a read from 0% to 100%.
+export async function stretchImage(blob, factorX) {
+  if (Math.abs(factorX - 1) < 0.01) return blob
+  const bitmap = await createImageBitmap(blob)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(bitmap.width * factorX))
+  canvas.height = bitmap.height
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  const result = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  canvas.width = canvas.height = 0
+  return result
+}

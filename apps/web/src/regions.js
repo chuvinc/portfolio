@@ -9,6 +9,7 @@ const MIN_SPECK = 3 // ignore ink blobs smaller than this many pixels
 // columns are further apart, so the allowance is generous along a column and tighter across.
 const ALONG = 1.8 // vertical gap allowed (down a column); simple glyphs like こ leave big gaps
 const ACROSS = 0.6 // horizontal gap allowed (between neighbouring columns)
+const MIN_GLYPH = 7 // glyphs smaller than this (on the shrunken copy we analyse) are dots and grain, not text
 const MAX_GROUPS = 1200 // cap on fragments carried into the merge pass, so noisy pages stay fast
 const LONE_GLYPH = [0.5, 2] // a lone blob joins the merge pass if it is this close to the page's typical glyph size
 // A box covering more than this share of the image is the image itself, not text. Kept high on purpose:
@@ -294,6 +295,7 @@ export function findRegions(image, sensitivity = 'normal') {
     const density = g.area / boxArea(g)
     return (
       looksLikeText(g, cfg) &&
+      g.glyph >= MIN_GLYPH &&
       boxArea(g) >= cfg.minArea * width * height &&
       boxArea(g) <= MAX_REGION_SHARE * width * height &&
       density <= MAX_DENSITY &&
@@ -367,15 +369,21 @@ export async function detectRegions(blob, sensitivity) {
   return { regions, ...size }
 }
 
-// Tesseract reads best when a glyph is around this many pixels tall.
-const TARGET_GLYPH = 48
+// Tesseract reads best when a glyph body is roughly this many pixels across (anything from about
+// 20 to 45 is fine; much bigger is where it falls apart: a 4-character column read 100% at 28px,
+// 75% at 100px, 50% at 160-240px, and as a single "・" at 400px, which is what high-resolution
+// manga pages contain).
+const TARGET_GLYPH = 34
 const MAX_UPSCALE = 4
+const MIN_SCALE = 0.1
 
-// Enlarge small text towards a comfortable glyph size. For one line/column the short side is
-// one glyph; for a block, a line (or column) pitch is a good stand-in.
-export const upscaleFor = ({ w, h, lines, direction }) => {
-  const glyph = lines <= 1 ? Math.min(w, h) : direction === 'vertical' ? w / lines : h / lines
-  return Math.min(MAX_UPSCALE, Math.max(1, TARGET_GLYPH / glyph))
+// How much to scale a crop so its glyphs land near the size Tesseract reads best: enlarge small
+// text, and shrink big text. For one line/column the short side is one glyph; for a block, a line
+// (or column) pitch is a good stand-in. Uses the text's own extent (without padding) when known.
+export const upscaleFor = ({ w, h, lines, direction, core }) => {
+  const { w: textW, h: textH } = core ?? { w, h }
+  const glyph = lines <= 1 ? Math.min(textW, textH) : direction === 'vertical' ? textW / lines : textH / lines
+  return Math.min(MAX_UPSCALE, Math.max(MIN_SCALE, TARGET_GLYPH / glyph))
 }
 
 // Extra margin around a crop. It follows the SHORT side: a tall narrow column padded by 4% of its

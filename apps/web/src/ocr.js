@@ -2,7 +2,7 @@ import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
 import { japaneseWhitelist } from './charset'
 import { cleanEntries, entriesFromData, entriesToText } from './postprocess'
-import { contrastImage, isolateInk } from './preprocess'
+import { contrastImage, isolateInk, stretchImage } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
 export { classifyRegion }
@@ -12,7 +12,11 @@ export const REGIONS_LAYOUT = 'regions'
 // Regions the engine is less sure of than this look like ghost text. Text-free artwork (screentone,
 // hatching, linework) read at a median of 0 and almost never reached 60, while real text read ~90.
 export const MIN_CONFIDENCE = 50
-const RETRY_BELOW = 65 // a weaker read than this is retried with the text isolated from its outline/background
+const RETRY_BELOW = 65 // a weaker read than this is retried at other scales, and with the text isolated from its outline/background
+const GOOD_ENOUGH = 75 // a read this believable ends the retrying early
+const RETRY_SCALES = [0.75, 1.33] // Tesseract is sensitive to the exact size: a column read 100% at one scale and 0% at a nearby one
+const RETRY_ASPECTS = [1.5, 0.7] // horizontal stretch for squeezed / tall lettering (or the reverse): 0% -> 100% on condensed text
+const UNDERFILL = 0.35 // a read with far fewer characters than this share of the box's capacity is suspect
 const OVERSHOOT = 1.6 // more characters than this many times a box's capacity can't be real text
 export const LAYOUTS = [
   { id: AUTO_LAYOUT, label: 'Automatic' },
@@ -106,6 +110,16 @@ function byLines(region, direction, w, h) {
   return count * Math.max(1, w / (h / count))
 }
 
+const countCharacters = (text) => Array.from(text).filter((ch) => ch.trim()).length
+
+// How much to believe a read when comparing candidates. Confidence alone is not enough: a nearly
+// blank picture reads as a single "。" at 85% confidence, which must not beat a decent read of
+// the right amount of text. So it is scaled down for too many characters (see above) and for far too few.
+export function readScore(confidence, characters, expected) {
+  const fill = Math.min(1, characters / Math.max(1, UNDERFILL * expected))
+  return plausibleConfidence(confidence, characters, expected) * fill
+}
+
 // Scales a confidence down when the read has more characters than the box could hold.
 export function plausibleConfidence(confidence, characters, expected) {
   const limit = expected * OVERSHOOT
@@ -128,9 +142,10 @@ export async function findTextRegions(image, sensitivity, contrast = 100) {
 }
 
 // Reads each region on its own. Japanese is read both ways and the believable one kept (see
-// chooseDirection). A weak read is retried with just the darkest, then just the lightest, pixels kept
-// (outlined text), and the most confident read wins. A region's own `contrast` overrides the page's.
-// Resolves to [{ id, text, entries, confidence, language, ink }],
+// chooseDirection). A weak read is retried at other scales, then with just the darkest, then just the lightest, pixels kept
+// (outlined text) and at slightly different scales, and the most confident read wins. A region's own
+// `contrast` overrides the page's.
+// Resolves to [{ id, text, entries, confidence, language, ink, scale, stretch }] (the last three say which retry won, if any),
 // where `entries` are the characters with their confidence (see postprocess.js).
 // Regions need { id, x, y, w, h, direction, lines, psm }.
 export async function readRegions(image, regions, { language = 'eng', contrast = 100, allowLatin = false } = {}, onProgress) {
@@ -138,11 +153,14 @@ export async function readRegions(image, regions, { language = 'eng', contrast =
   const results = []
   let regionContrast = contrast // the contrast of the region being read
   let ink = null // null = read as is; 'dark' / 'light' = isolate that ink first
+  let scaleBoost = 1 // multiplies the usual scale, for the retries
+  let aspect = 1 // horizontal stretch applied to the crop, for the retries
 
   const read = async (lang, psm, box, unit) => {
     const worker = await pool.get(lang)
     await worker.setParameters({ tessedit_pageseg_mode: psm, ...charsetFor(lang, allowLatin) })
-    let crop = await cropRegion(image, box, upscaleFor(unit))
+    let crop = await cropRegion(image, box, upscaleFor(unit) * scaleBoost)
+    crop = await stretchImage(crop, aspect)
     crop = await contrastImage(crop, regionContrast / 100)
     if (ink) crop = await isolateInk(crop, ink)
     const { data } = await worker.recognize(crop, {}, { text: true, blocks: true })
@@ -188,18 +206,35 @@ export async function readRegions(image, regions, { language = 'eng', contrast =
       onProgress?.({ status: `reading region ${i + 1} of ${regions.length}`, progress: i / regions.length })
       regionContrast = region.contrast ?? contrast
       ink = null
+      scaleBoost = 1
+      aspect = 1
+      const score = (r) => readScore(r.confidence, countCharacters(r.text), expectedGlyphs(region, r.direction ?? region.direction))
       let best = await readOnce(region)
-      if (best.confidence < RETRY_BELOW) {
-        for (const mode of ['dark', 'light']) {
-          ink = mode
+      if (score(best) < RETRY_BELOW) {
+        // Cheapest and most often useful first: other scales, then other proportions, then the
+        // outlined-text variants. Stop as soon as a read is believable.
+        const attempts = [
+          ...RETRY_SCALES.map((scale) => ({ scale })),
+          ...RETRY_ASPECTS.map((stretch) => ({ stretch })),
+          { ink: 'dark' },
+          { ink: 'light' },
+        ]
+        for (const attempt of attempts) {
+          if (score(best) >= GOOD_ENOUGH) break
+          scaleBoost = attempt.scale ?? 1
+          aspect = attempt.stretch ?? 1
+          ink = attempt.ink ?? null
           const alternative = await readOnce(region)
-          if (alternative.confidence > best.confidence) best = { ...alternative, ink: mode }
+          // A retry only replaces the read if it is good enough to be shown: trying many variants and
+          // keeping the luckiest would otherwise turn screentone into hundreds of junk characters.
+          if (score(alternative) > Math.max(score(best), MIN_CONFIDENCE)) best = { ...alternative, ...attempt }
         }
+        scaleBoost = 1
+        aspect = 1
         ink = null
       }
-      const characters = Array.from(best.text).filter((ch) => ch.trim()).length
-      const confidence = plausibleConfidence(best.confidence, characters, expectedGlyphs(region, best.direction ?? region.direction))
-      results.push({ id: region.id, text: best.text, entries: best.entries, confidence, language: best.language, ink: best.ink })
+      const confidence = plausibleConfidence(best.confidence, countCharacters(best.text), expectedGlyphs(region, best.direction ?? region.direction))
+      results.push({ id: region.id, text: best.text, entries: best.entries, confidence, language: best.language, ink: best.ink, scale: best.scale, stretch: best.stretch })
     }
   } finally {
     await pool.close()

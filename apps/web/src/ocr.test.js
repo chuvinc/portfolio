@@ -21,6 +21,7 @@ vi.mock('./layout', () => ({ inferLayout: vi.fn() }))
 vi.mock('./preprocess', () => ({
   contrastImage: vi.fn(async (image, factor) => (factor > 1 ? `${image}+contrast${factor}` : image)),
   isolateInk: vi.fn(async (image, mode) => `${image}+${mode}`),
+  stretchImage: vi.fn(async (image, factor) => (factor === 1 ? image : `${image}+wide${factor}`)),
 }))
 vi.mock('tesseract.js', () => ({
   PSM: { AUTO: '3', SINGLE_BLOCK: '6', SINGLE_COLUMN: '4', SINGLE_LINE: '7', SPARSE_TEXT: '11', SINGLE_BLOCK_VERT_TEXT: '5' },
@@ -32,14 +33,14 @@ vi.mock('tesseract.js', () => ({
     // Echoes the model and crop so the test can see what was read, and in what order.
     recognize: vi.fn(async (crop) => {
       attempts.push(lang)
-      const variant = ['dark', 'light'].find((m) => String(crop).includes(`+${m}`))
+      const variant = ['dark', 'light', 'wide'].find((m) => String(crop).includes(`+${m}`))
       return { data: { text: `[${lang}:${crop}]`, confidence: variant && variantConf[variant] !== undefined ? variantConf[variant] : confidence[lang] } }
     }),
     terminate: vi.fn(),
   })),
 }))
 
-const { readRegions, chooseDirection, expectedGlyphs, plausibleConfidence, findTextRegions } = await import('./ocr')
+const { readRegions, chooseDirection, expectedGlyphs, plausibleConfidence, findTextRegions, readScore } = await import('./ocr')
 
 // What the real models do (measured on rendered text): on vertical text the horizontal model is
 // plainly unsure; on horizontal text the vertical model is confidently wrong.
@@ -61,6 +62,7 @@ const verticalBlock = {
   y: 40,
   w: 100,
   h: 300,
+  glyph: 27, // so the box holds about as many characters as the fake engine echoes back
   direction: 'vertical',
   lines: 3,
   psm: '5',
@@ -70,7 +72,7 @@ const verticalBlock = {
     { x: 160, w: 20 },
   ],
 }
-const horizontalLine = { id: 2, x: 10, y: 10, w: 200, h: 30, direction: 'horizontal', lines: 1, psm: '7' }
+const horizontalLine = { id: 2, x: 10, y: 10, w: 200, h: 30, glyph: 14, direction: 'horizontal', lines: 1, psm: '7' }
 const read = (region, language = 'jpn') => readRegions(new Blob(['x']), [region], { language }).then(([r]) => r)
 
 test('vertical blocks are read one column at a time, right to left', async () => {
@@ -215,4 +217,48 @@ test("a region's own contrast overrides the page's", async () => {
   expect(own[0].text).toContain('+contrast2.5')
   const page = await readRegions(new Blob(['x']), [horizontalLine], { language: 'jpn', contrast: 150 })
   expect(page[0].text).toContain('+contrast1.5')
+})
+
+test('a weak read is also retried at other scales, and a scale that works wins', async () => {
+  const { cropRegion } = await import('./regions')
+  Object.assign(confidence, { jpn_vert: 20, jpn: 10 }) // the plain read is hopeless
+  cropRegion.mockClear()
+  await read(horizontalLine)
+  // upscaleFor is mocked to 1 here, so the retries show up as scales of 1, 0.75 and 1.33
+  const scales = cropRegion.mock.calls.map((c) => c[2])
+  expect(scales).toContain(0.75)
+  expect(scales).toContain(1.33)
+})
+
+test('readScore: a confident read of almost no text does not beat a decent read of the right amount', () => {
+  const expected = 8 // the box holds about 8 characters
+  const goodRead = readScore(61, 4, expected) // "呪術廻戦" at 61%
+  const blankPage = readScore(85, 1, expected) // a lone "。" at 85%
+  expect(goodRead).toBeGreaterThan(blankPage)
+  expect(readScore(85, 4, expected)).toBe(85) // a plausible amount keeps its confidence
+  expect(readScore(85, 0, expected)).toBe(0) // nothing read scores nothing
+})
+
+test('squeezed lettering is rescued by restoring its proportions', async () => {
+  Object.assign(confidence, { jpn_vert: 20, jpn: 10 })
+  variantConf.wide = 88
+  const result = await read(horizontalLine)
+  expect(result.stretch).toBe(1.5)
+  expect(result.text).toContain('+wide1.5')
+})
+
+test('retrying stops as soon as a read is believable', async () => {
+  const { cropRegion } = await import('./regions')
+  // Weak plain read (10%) but the first retry (scale 0.75) reads at 80%: nothing after it should run.
+  Object.assign(confidence, { jpn_vert: 10, jpn: 5 })
+  const scalesSeen = []
+  cropRegion.mockImplementation(async (_image, box, scale) => {
+    scalesSeen.push(scale)
+    return scale === 0.75 ? `crop@x=${box.x}+dark` : `crop@x=${box.x}`
+  })
+  variantConf.dark = 80
+  await read(horizontalLine)
+  const retried = scalesSeen.filter((s) => s === 1.33).length
+  expect(scalesSeen).toContain(0.75)
+  expect(retried).toBe(0) // the 1.33 scale and everything after it were skipped
 })

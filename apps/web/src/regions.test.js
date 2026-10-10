@@ -123,11 +123,19 @@ test('a vertical block records where each column is', () => {
   expect(r.columns.map((c) => c.x)).toEqual([100, 124, 148])
 })
 
-test('upscaleFor enlarges blocks by their line/column pitch, not just single lines', () => {
-  expect(upscaleFor({ w: 90, h: 400, lines: 3, direction: 'vertical' })).toBeCloseTo(48 / 30)
-  expect(upscaleFor({ w: 400, h: 90, lines: 3, direction: 'horizontal' })).toBeCloseTo(48 / 30)
-  expect(upscaleFor({ w: 200, h: 24, lines: 1, direction: 'horizontal' })).toBe(2)
-  expect(upscaleFor({ w: 500, h: 200, lines: 2, direction: 'horizontal' })).toBe(1)
+test('upscaleFor brings glyphs to the size Tesseract reads best, enlarging small text and shrinking big', () => {
+  // a 3-column block, 90px of text across: each column is 30px, so it is enlarged a little
+  expect(upscaleFor({ w: 90, h: 400, lines: 3, direction: 'vertical' })).toBeCloseTo(34 / 30)
+  expect(upscaleFor({ w: 400, h: 90, lines: 3, direction: 'horizontal' })).toBeCloseTo(34 / 30)
+  // a small line, 17px tall: doubled
+  expect(upscaleFor({ w: 200, h: 17, lines: 1, direction: 'horizontal' })).toBe(2)
+  // big text is shrunk instead of left alone: a 240px-wide column becomes 34px glyphs
+  expect(upscaleFor({ w: 240, h: 1000, lines: 1, direction: 'vertical' })).toBeCloseTo(34 / 240)
+  // the text's own extent is used when known, ignoring the padding around it
+  expect(upscaleFor({ w: 120, h: 500, lines: 1, direction: 'vertical', core: { w: 60, h: 440 } })).toBeCloseTo(34 / 60)
+  // never absurdly small or large
+  expect(upscaleFor({ w: 5000, h: 9000, lines: 1, direction: 'vertical' })).toBe(0.1)
+  expect(upscaleFor({ w: 4, h: 100, lines: 1, direction: 'vertical' })).toBe(4)
 })
 
 test('a busy page of large artwork does not swallow the text into one page-sized box', () => {
@@ -270,4 +278,10 @@ test('crop padding follows the short side, so a tall column does not reach its n
   expect(cropPadding(81, 910)).toBeLessThanOrEqual(8)
   expect(cropPadding(910, 81)).toBeLessThanOrEqual(8)
   expect(cropPadding(100, 100)).toBe(7)
+})
+
+test('screentone dots are not text, however regular they are', () => {
+  const img = blank(300, 300)
+  for (let y = 10; y < 290; y += 6) for (let x = 10; x < 290; x += 6) ring(img, x, y, 3) // a grid of tiny dots
+  expect(findRegions(img)).toEqual([])
 })
