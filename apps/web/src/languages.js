@@ -1,11 +1,10 @@
-// Languages offered for OCR. Each `id` is a Tesseract language code, or several
-// joined with '+' to load them together. Each code's data file is copied into
-// public/ocr/lang by scripts/copy-ocr-assets.mjs from @tesseract.js-data/<code>.
+// Languages offered for OCR. `id` is the language the user picks; `models` are the Tesseract
+// data files it needs, copied into public/ocr/lang by scripts/copy-ocr-assets.mjs from
+// @tesseract.js-data/<model>. Japanese has separate horizontal and vertical models, and the
+// reader chooses between them itself.
 export const LANGUAGES = [
-  { id: 'eng', label: 'English' },
-  { id: 'jpn', label: 'Japanese' },
-  { id: 'jpn_vert', label: 'Japanese (vertical text)' },
-  { id: 'jpn+jpn_vert', label: 'Japanese (mixed horizontal + vertical)' },
+  { id: 'eng', label: 'English', models: ['eng'] },
+  { id: 'jpn', label: 'Japanese', models: ['jpn', 'jpn_vert'] },
 ]
 
 // Tesseract puts spaces between Japanese characters; drop them.
@@ -14,14 +13,6 @@ const CJK_GAP = new RegExp(`(?<=${CJK})[ \t]+(?=${CJK})`, 'g')
 
 export function tidyText(text) {
   return text.replace(CJK_GAP, '')
-}
-
-// Japanese has separate horizontal and vertical models; pick the one that matches
-// the detected text direction. Other languages are unchanged.
-export function languageFor(id, direction) {
-  if (direction === 'vertical' && id === 'jpn') return 'jpn_vert'
-  if (direction === 'horizontal' && id === 'jpn_vert') return 'jpn'
-  return id
 }
 
 // Pages in these languages are laid out right to left when text is vertical.

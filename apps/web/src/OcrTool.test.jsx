@@ -134,3 +134,19 @@ test('region mode: dragging over an existing box draws a new one instead of togg
   await waitFor(() => expect(document.querySelectorAll('.region')).toHaveLength(3))
   expect(document.querySelectorAll('.region.on')).toHaveLength(1) // only the new box is on
 })
+
+test('region mode: "Read all" switches every box on and hides the unsure ones', async () => {
+  await findRegionsMode()
+  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+  const kinds = [...document.querySelectorAll('.region')].map((b) => (b.classList.contains('low') ? 'low' : 'on'))
+  expect(kinds.sort()).toEqual(['low', 'on']) // region 2 was only 20% sure, so it is hidden
+})
+
+test('the language dropdown is just English and Japanese', () => {
+  render(<OcrTool />)
+  pick()
+  const options = [...screen.getByLabelText(/Language/).querySelectorAll('option')].map((o) => o.textContent)
+  expect(options).toEqual(['English', 'Japanese'])
+})

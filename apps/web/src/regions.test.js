@@ -146,3 +146,14 @@ test('a busy page of large artwork does not swallow the text into one page-sized
   expect(h && h.y).toBeGreaterThan(700)
   expect(v && v.x).toBeGreaterThan(700)
 })
+
+test('sensitivity trades junk boxes for missed text', () => {
+  const img = blank(600, 300)
+  row(img, 20, 20, 3) // a very short run: only three glyphs
+  ring(img, 300, 100, 10) // plus a lone glyph
+  ring(img, 313, 100, 10)
+  const count = (s) => findRegions(img, s).length
+  expect(count('strict')).toBeLessThanOrEqual(count('normal'))
+  expect(count('normal')).toBeLessThanOrEqual(count('loose'))
+  expect(count('loose')).toBeGreaterThan(count('strict')) // loose finds the two-glyph pair strict ignores
+})

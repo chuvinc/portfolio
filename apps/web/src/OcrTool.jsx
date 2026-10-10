@@ -29,7 +29,7 @@ const clamp = (n) => Math.min(1, Math.max(0, n))
 // e.g. "vertical text, 3 lines → "One block of text" (Japanese)"
 function describe({ direction, lines, psm, language }) {
   const layout = LAYOUTS.find((l) => l.id === psm)?.label ?? psm
-  const lang = LANGUAGES.find((l) => l.id === language)?.label ?? language
+  const lang = language === 'jpn_vert' ? 'Japanese, vertical model' : (LANGUAGES.find((l) => l.id === language)?.label ?? language)
   return `${direction} text, ${lines} line${lines === 1 ? '' : 's'} → "${layout}" (${lang})`
 }
 
@@ -151,6 +151,7 @@ export default function OcrTool() {
     enhance: false,
   })
   const [showLow, setShowLow] = useState(false)
+  const [sensitivity, setSensitivity] = useState('normal')
   const previewUrl = useRef(null)
   const run = useRef(0)
   const nextRegionId = useRef(1)
@@ -220,15 +221,15 @@ export default function OcrTool() {
 
   const findRegions = () =>
     guarded({ regions: null, status: 'finding text regions' }, async () => {
-      const { regions, page } = await findTextRegions(state.image)
+      const { regions, page } = await findTextRegions(state.image, sensitivity)
       nextRegionId.current = regions.length + 1
       const found = regions.map((r, i) => ({ ...r, id: i + 1, included: false }))
       return () => ({ regions: found, page, status: '' })
     })
 
-  const readPending = () =>
+  const readNow = (regions) =>
     guarded({ status: 'starting' }, async (id) => {
-      const todo = state.regions.filter((r) => r.included && r.text === undefined)
+      const todo = regions.filter((r) => r.included && r.text === undefined)
       const results = await readRegions(state.image, todo, options, progress(id))
       return (s) => ({
         status: 'done',
@@ -239,6 +240,15 @@ export default function OcrTool() {
         }),
       })
     })
+
+  const readPending = () => readNow(state.regions)
+
+  // Switch every box on and read them all; the low-confidence ones are then hidden automatically.
+  const readAll = () => {
+    const all = state.regions.map((r) => ({ ...r, included: true }))
+    setState((s) => ({ ...s, regions: all }))
+    readNow(all)
+  }
 
   const toggleRegion = (id) =>
     setState((s) => ({ ...s, regions: s.regions.map((r) => (r.id === id ? { ...r, included: !r.included } : r)) }))
@@ -353,6 +363,16 @@ export default function OcrTool() {
                 ))}
               </select>
             </label>
+            {regionMode && (
+              <label>
+                Detection{' '}
+                <select value={sensitivity} onChange={(e) => setSensitivity(e.target.value)}>
+                  <option value="strict">Strict (fewer boxes)</option>
+                  <option value="normal">Normal</option>
+                  <option value="loose">Loose (more boxes)</option>
+                </select>
+              </label>
+            )}
             <label>
               <input
                 type="checkbox"
@@ -377,6 +397,9 @@ export default function OcrTool() {
               <>
                 <button type="button" onClick={readPending} disabled={busy || pending === 0}>
                   Read {pending} region{pending === 1 ? '' : 's'}
+                </button>
+                <button type="button" onClick={readAll} disabled={busy}>
+                  Read all (hide unsure)
                 </button>
                 <button type="button" onClick={() => setAllRegions(true)} disabled={busy}>
                   All on
@@ -406,7 +429,7 @@ export default function OcrTool() {
       {hasOutput && (
         <>
           {!regionMode && state.detected && (
-            <p className="status">Auto-detected: {describe(state.detected)}</p>
+            <p className="status">Read as: {describe(state.detected)}</p>
           )}
           {regionMode && (
             <label className="options">

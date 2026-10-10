@@ -7,8 +7,14 @@ const MIN_SPECK = 3 // ignore ink blobs smaller than this many pixels
 const GAP_FACTOR = 1.2 // two blobs closer than this many (smaller blob) sizes are one group
 const MAX_REGION_SHARE = 0.6 // a box covering more than this share of the page is the page, not text
 const SAME_SIZE = [0.6, 1.67] // groups merge only if their glyphs are this close in size
-const MIN_BLOBS = 3 // a text group has at least this many glyphs
-const MIN_AREA_SHARE = 0.0008 // ...and its box covers at least this share of the page
+const MIN_BLOBS = 3 // fixed floor used when judging a run of glyphs (see SENSITIVITY for groups)
+// How picky detection is about what counts as text. "strict" drops more junk but may miss
+// small or odd text; "loose" keeps more, at the cost of more junk boxes to switch off.
+const SENSITIVITY = {
+  strict: { minGlyphs: 4, uniform: 0.7, minArea: 0.0012 },
+  normal: { minGlyphs: 3, uniform: 0.6, minArea: 0.0008 },
+  loose: { minGlyphs: 2, uniform: 0.45, minArea: 0.0004 },
+}
 const MAX_DENSITY = 0.65 // ink share of the group's box; above this it's a solid picture
 const MIN_DENSITY = 0.02 // ...and below this it's a stray line or smudge
 const MAX_REGIONS = 40
@@ -78,7 +84,6 @@ function crop({ data, width }, box) {
 }
 
 const SIZE_SPREAD = [0.4, 2.5] // a glyph is this far (x median) from the group's median size at most
-const MIN_UNIFORM = 0.6 // share of a group's blobs that must be glyph-sized, or it's artwork
 const MAX_DOMINANT = 0.6 // one blob holding more than this share of a group's ink is a drawing
 const MERGE_GAP = 1.6 // sibling groups within this many glyphs (and lined up) are one text area
 const MERGE_OVERLAP = 0.6 // ...if they overlap this much along the shared edge
@@ -109,11 +114,11 @@ function typicalGlyph(blobs) {
 }
 
 // Text is made of similar-sized glyphs; drawings are one big shape or a mix of sizes.
-function looksLikeText(g) {
-  if (g.members.length < MIN_BLOBS) return false
+function looksLikeText(g, { minGlyphs, uniform }) {
+  if (g.members.length < minGlyphs) return false
   const m = median(g.members.map(size))
   const similar = g.members.filter((b) => size(b) >= m * SIZE_SPREAD[0] && size(b) <= m * SIZE_SPREAD[1])
-  if (similar.length < MIN_BLOBS || similar.length / g.members.length < MIN_UNIFORM) return false
+  if (similar.length < minGlyphs || similar.length / g.members.length < uniform) return false
   return Math.max(...g.members.map((b) => b.area)) / g.area <= MAX_DOMINANT
 }
 
@@ -163,7 +168,8 @@ function stripDirection(members, glyph) {
 // lines/columns, neighbouring lines/columns merge into blocks, and groups that don't
 // look like text (mixed sizes, one big shape, too dense or too faint) are dropped.
 // Returns padded boxes in the image's own pixels, tagged with a direction and layout mode.
-export function findRegions(image) {
+export function findRegions(image, sensitivity = 'normal') {
+  const cfg = SENSITIVITY[sensitivity] ?? SENSITIVITY.normal
   const { width, height } = image
   let blobs = findBlobs(image)
   // Drop page-sized frames and rules, and cap the count so noisy art can't blow up the merge.
@@ -171,7 +177,7 @@ export function findRegions(image) {
     .filter((b) => b.maxX - b.minX < width * 0.5 && b.maxY - b.minY < height * 0.5)
     .sort((a, b) => b.area - a.area)
     .slice(0, 4000)
-  if (blobs.length < MIN_BLOBS) return []
+  if (blobs.length < cfg.minGlyphs) return []
 
   const glyph = typicalGlyph(blobs)
 
@@ -206,7 +212,7 @@ export function findRegions(image) {
   })
 
   // Keep text-like groups, then join siblings that are one text area split by a wide gap.
-  let groups = [...grouped.values()].filter(looksLikeText)
+  let groups = [...grouped.values()].filter((g) => looksLikeText(g, cfg))
   for (let merged = true; merged; ) {
     merged = false
     outer: for (let i = 0; i < groups.length; i++) {
@@ -226,7 +232,7 @@ export function findRegions(image) {
   for (const g of groups) {
     const boxArea = (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
     const density = g.area / boxArea
-    if (boxArea < MIN_AREA_SHARE * width * height || boxArea > MAX_REGION_SHARE * width * height) continue
+    if (boxArea < cfg.minArea * width * height || boxArea > MAX_REGION_SHARE * width * height) continue
     if (density > MAX_DENSITY || density < MIN_DENSITY) continue
 
     let { direction, lines, psm } = analyzeInk(crop(image, g))
@@ -262,7 +268,7 @@ export function orderRegions(regions, pageHeight, rightToLeft) {
 
 // Decodes an image Blob (without keeping it), finds its text regions, and returns them
 // in the original image's pixels along with that image's size.
-export async function detectRegions(blob) {
+export async function detectRegions(blob, sensitivity) {
   const bitmap = await createImageBitmap(blob)
   const scale = Math.min(1, ANALYSIS_EDGE / Math.max(bitmap.width, bitmap.height))
   const canvas = document.createElement('canvas')
@@ -276,7 +282,7 @@ export async function detectRegions(blob) {
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
   canvas.width = canvas.height = 0
   binarize(imageData)
-  const regions = findRegions(imageData).map((r) => ({
+  const regions = findRegions(imageData, sensitivity).map((r) => ({
     ...r,
     x: Math.round(r.x / scale),
     y: Math.round(r.y / scale),
