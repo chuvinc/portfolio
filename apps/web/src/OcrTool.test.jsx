@@ -387,3 +387,30 @@ test('contrast can be set for several picked boxes at once', async () => {
   expect(sent.find((r) => r.id === 1).contrast).toBe(230)
   expect(sent.find((r) => r.id === 2).contrast).toBeUndefined()
 })
+
+test('the result sits under the picture, in its own cell next to the controls, and the buttons stay with you', async () => {
+  await readFirstBox()
+  const workspace = document.querySelector('.workspace')
+  const [stage, sidebar, output] = ['.stage', '.sidebar', '.output'].map((q) => workspace.querySelector(q))
+  expect(stage && sidebar && output).toBeTruthy()
+  // the three cells, in the order the expanded layout stacks them
+  expect([...workspace.children]).toEqual([stage, sidebar, output])
+  // the extracted text lives in the output cell, not among the controls
+  expect(output.querySelector('[aria-label="Extracted text"]')).toBeTruthy()
+  expect(sidebar.querySelector('[aria-label="Extracted text"]')).toBeNull()
+  expect(output.textContent).toContain('Copy text')
+  // the button bar is the sticky one
+  expect(sidebar.firstElementChild.classList.contains('bar')).toBe(true)
+  expect(sidebar.firstElementChild.textContent).toContain('Read all (hide unsure)')
+})
+
+test('progress and errors show beside the buttons', async () => {
+  const el = await findRegionsMode()
+  expect(el).toBeTruthy()
+  readRegions.mockImplementationOnce(() => new Promise(() => {})) // never finishes
+  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  const bar = await screen.findByRole('progressbar', {}, { timeout: 2000 }).catch(() => null)
+  const sidebar = document.querySelector('.sidebar')
+  expect(sidebar.querySelector('progress') ?? bar).toBeTruthy()
+  expect(document.querySelector('.output progress')).toBeNull()
+})

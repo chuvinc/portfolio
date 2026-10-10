@@ -317,26 +317,56 @@ footer {
   align-items: center;
 }
 
+/* Compact: the picture with the result directly under it on the left, the controls on the right
+   (spanning both rows). Expanded: everything stacks in order: picture, controls, result. */
 .workspace {
   display: grid;
   grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
+  grid-template-areas:
+    'stage side'
+    'output side';
   gap: 16px;
   align-items: start;
 }
 
 .workspace.expanded {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'stage'
+    'side'
+    'output';
 }
 
 .workspace .stage {
+  grid-area: stage;
   min-width: 0;
 }
 
-.sidebar {
+.workspace .output {
+  grid-area: output;
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+}
+
+.sidebar {
+  grid-area: side;
+  align-self: stretch; /* as tall as the picture column, so the button bar can follow all the way down */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* The Read / select buttons follow you as you scroll. */
+.sidebar > .actions.bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 8px 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
 }
 
 .sidebar .actions {
@@ -346,6 +376,10 @@ footer {
 @media (max-width: 800px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'stage'
+      'side'
+      'output';
   }
 }
 

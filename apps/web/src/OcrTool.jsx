@@ -590,7 +590,7 @@ export default function OcrTool() {
               </div>
             </div>
             <div className="sidebar">
-              <div className="actions">
+              <div className="actions bar">
                 {!regionMode && (
                   <button type="button" onClick={extract} disabled={busy}>
                     Extract text
@@ -624,6 +624,12 @@ export default function OcrTool() {
                   Clear
                 </button>
               </div>
+              {busy && (
+                <progress value={state.progress} max="1" aria-label={state.status}>
+                  {state.status}
+                </progress>
+              )}
+              {state.error && <p className="status">Couldn't read that image: {state.error.message}</p>}
               {regionMode && state.regions && (
                 <p className="status">
                   Found {state.regions.length} candidate boxes, all switched off (red). Click the ones
@@ -730,6 +736,80 @@ export default function OcrTool() {
                 </label>
               </div>
             </div>
+            <div className="output">
+              {hasOutput && (
+                <>
+                  {!regionMode && state.detected && (
+                    <p className="status">Read as: {describe(state.detected)}</p>
+                  )}
+                  {regionMode && (
+                    <label className="options">
+                      <span>
+                        <input type="checkbox" checked={showLow} onChange={(e) => setShowLow(e.target.checked)} />{' '}
+                        Include regions Tesseract was unsure about (orange boxes)
+                      </span>
+                    </label>
+                  )}
+                  {editing ? (
+                    <>
+                      <textarea
+                        rows={8}
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        aria-label="Edit extracted text"
+                      />
+                      <div className="actions">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setState((s) => ({ ...s, edit: { from: shown.text, text: draft } }))
+                            setEditing(false)
+                          }}
+                        >
+                          Save
+                        </button>
+                        <button type="button" onClick={() => setEditing(false)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <FixableText entries={view.entries} onAdd={addGlossaryLine} />
+                      {view.fixed > 0 && (
+                        <p className="status">
+                          Glossary corrected {view.fixed} character{view.fixed === 1 ? '' : 's'}.
+                        </p>
+                      )}
+                      {edited && (
+                        <p className="status">
+                          Edited by hand. Reading again, or changing the boxes or glossary, replaces it.
+                        </p>
+                      )}
+                      <div className="actions">
+                        <button type="button" onClick={() => navigator.clipboard.writeText(output)}>
+                          Copy text
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDraft(output)
+                            setEditing(true)
+                          }}
+                        >
+                          Edit text
+                        </button>
+                        {edited && (
+                          <button type="button" onClick={() => setState((s) => ({ ...s, edit: null }))}>
+                            Reset to original
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
           </div>
           <details className="glossary">
             <summary>Glossary and corrections{glossaryText ? ' (in use)' : ''}</summary>
@@ -757,85 +837,6 @@ export default function OcrTool() {
         </>
       )}
 
-      {busy && (
-        <progress value={state.progress} max="1" aria-label={state.status}>
-          {state.status}
-        </progress>
-      )}
-      {state.error && <p className="status">Couldn't read that image: {state.error.message}</p>}
-
-      {hasOutput && (
-        <>
-          {!regionMode && state.detected && (
-            <p className="status">Read as: {describe(state.detected)}</p>
-          )}
-          {regionMode && (
-            <label className="options">
-              <span>
-                <input type="checkbox" checked={showLow} onChange={(e) => setShowLow(e.target.checked)} />{' '}
-                Include regions Tesseract was unsure about (orange boxes)
-              </span>
-            </label>
-          )}
-          {editing ? (
-            <>
-              <textarea
-                rows={8}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                aria-label="Edit extracted text"
-              />
-              <div className="actions">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setState((s) => ({ ...s, edit: { from: shown.text, text: draft } }))
-                    setEditing(false)
-                  }}
-                >
-                  Save
-                </button>
-                <button type="button" onClick={() => setEditing(false)}>
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <FixableText entries={view.entries} onAdd={addGlossaryLine} />
-              {view.fixed > 0 && (
-                <p className="status">
-                  Glossary corrected {view.fixed} character{view.fixed === 1 ? '' : 's'}.
-                </p>
-              )}
-              {edited && (
-                <p className="status">
-                  Edited by hand. Reading again, or changing the boxes or glossary, replaces it.
-                </p>
-              )}
-              <div className="actions">
-                <button type="button" onClick={() => navigator.clipboard.writeText(output)}>
-                  Copy text
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDraft(output)
-                    setEditing(true)
-                  }}
-                >
-                  Edit text
-                </button>
-                {edited && (
-                  <button type="button" onClick={() => setState((s) => ({ ...s, edit: null }))}>
-                    Reset to original
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </>
-      )}
     </div>
   )
 }
