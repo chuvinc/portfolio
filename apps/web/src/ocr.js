@@ -1,7 +1,6 @@
 import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
 import { cleanEntries, entriesFromData, entriesToText } from './postprocess'
-import { enhanceImage } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
 export { classifyRegion }
@@ -78,15 +77,14 @@ export async function findTextRegions(image, sensitivity) {
 // only if that read isn't confident. Resolves to [{ id, text, entries, confidence, language }],
 // where `entries` are the characters with their confidence (see postprocess.js).
 // Regions need { id, x, y, w, h, direction, lines, psm }.
-export async function readRegions(image, regions, { language = 'eng', enhance = false } = {}, onProgress) {
+export async function readRegions(image, regions, { language = 'eng' } = {}, onProgress) {
   const pool = workerPool()
   const results = []
 
   const read = async (lang, psm, box, unit) => {
     const worker = await pool.get(lang)
     await worker.setParameters({ tessedit_pageseg_mode: psm })
-    let crop = await cropRegion(image, box, upscaleFor(unit))
-    if (enhance) crop = await enhanceImage(crop)
+    const crop = await cropRegion(image, box, upscaleFor(unit))
     const { data } = await worker.recognize(crop, {}, { text: true, blocks: true })
     return { entries: entriesFromData(data), confidence: data.confidence }
   }
@@ -145,12 +143,7 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
 // Extracts text from a whole image Blob/File in one pass, entirely in the browser.
 // Resolves to { text, entries, detected }, where `detected` describes what was used (or null).
 // Nothing is uploaded, and cacheMethod 'none' keeps tesseract from writing to IndexedDB.
-export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT, enhance = false } = {}, onProgress) {
-  if (enhance) {
-    onProgress?.({ status: 'enhancing image', progress: 0 })
-    image = await enhanceImage(image)
-  }
-
+export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT } = {}, onProgress) {
   let geometry = null
   if (layout === AUTO_LAYOUT) {
     onProgress?.({ status: 'detecting layout', progress: 0 })

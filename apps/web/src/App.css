@@ -213,3 +213,50 @@ footer {
 .glossary textarea {
   margin-top: 8px;
 }
+
+.fixable {
+  padding: 12px 14px;
+  font-size: 22px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  color: var(--text-h);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.fixable span {
+  cursor: pointer;
+}
+
+.fixable span:hover {
+  background: var(--accent-bg);
+}
+
+.fixable .unsure {
+  text-decoration: underline dotted #f59e0b 2px;
+  text-underline-offset: 4px;
+}
+
+.fixable .picked {
+  background: var(--accent-bg);
+  outline: 1px solid var(--accent-border);
+}
+
+.fixer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+}
+
+.fixer input {
+  font: inherit;
+  padding: 2px 6px;
+}
+
+.fixer input[type='number'] {
+  width: 4em;
+}

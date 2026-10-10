@@ -1,8 +1,5 @@
-// Image cleanup applied in the browser before OCR. Tesseract reads best on
-// dark text over a light background at roughly 300 DPI.
-
-const MIN_LONG_EDGE = 1600 // upscale small images up to this
-const MAX_LONG_EDGE = 3200 // never grow past this (memory)
+// Black-and-white conversion used by text detection (finding where the ink is). It is not
+// applied to the image Tesseract reads: that hurt accuracy by about 10 points in testing.
 
 // Grayscale + Otsu threshold, in place. Inverts if the result is mostly dark,
 // since that means light text on a dark background.
@@ -47,33 +44,4 @@ export function binarize({ data, width, height }) {
     data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = v
     data[i * 4 + 3] = 255
   }
-}
-
-// How much to scale an image so its long edge lands in a good OCR range.
-export function scaleFor(width, height) {
-  const long = Math.max(width, height)
-  if (long < MIN_LONG_EDGE) return Math.min(MIN_LONG_EDGE / long, 4)
-  if (long > MAX_LONG_EDGE) return MAX_LONG_EDGE / long
-  return 1
-}
-
-// Returns a cleaned-up PNG Blob. The input is not modified or kept.
-export async function enhanceImage(blob) {
-  const bitmap = await createImageBitmap(blob)
-  const scale = scaleFor(bitmap.width, bitmap.height)
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.round(bitmap.width * scale)
-  canvas.height = Math.round(bitmap.height * scale)
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-  bitmap.close()
-
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  binarize(imageData)
-  ctx.putImageData(imageData, 0, 0)
-
-  const result = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
-  canvas.width = canvas.height = 0 // release the pixel buffer
-  return result
 }

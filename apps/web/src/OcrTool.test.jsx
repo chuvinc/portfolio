@@ -47,7 +47,7 @@ test('extracts text from a chosen image and clears everything', async () => {
   pick()
 
   fireEvent.click(await screen.findByText('Extract text'))
-  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('hello world'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('hello world'))
 
   fireEvent.click(screen.getByText('Clear'))
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake')
@@ -62,16 +62,15 @@ test('ignores non-image files', () => {
   expect(screen.queryByText('Extract text')).toBeNull()
 })
 
-test('passes the chosen layout and enhance options to OCR, with Japanese as the language', async () => {
+test('passes the chosen layout to OCR, with Japanese as the language', async () => {
   render(<OcrTool />)
   pick()
 
   fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: '7' } })
-  fireEvent.click(screen.getByLabelText(/Enhance image/))
   fireEvent.click(screen.getByText('Extract text'))
 
   await waitFor(() =>
-    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7', enhance: true }, expect.any(Function)),
+    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7' }, expect.any(Function)),
   )
 })
 
@@ -113,7 +112,7 @@ test('region mode: boxes start off, clicking turns them on, only those are read'
   expect(boxes().filter((b) => b.classList.contains('on'))).toHaveLength(1)
   fireEvent.click(screen.getByText('Read 1 region'))
 
-  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   expect(readRegions.mock.calls.at(-1)[1]).toHaveLength(1)
 })
 
@@ -122,9 +121,9 @@ test('region mode: low-confidence regions are hidden until asked for', async () 
   fireEvent.click(screen.getByText('All on'))
   fireEvent.click(screen.getByText('Read 2 regions'))
 
-  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   fireEvent.click(screen.getByLabelText(/Include regions Tesseract was unsure about/))
-  expect(screen.getByLabelText('Extracted text').value).toContain('text 2')
+  expect(screen.getByLabelText('Extracted text').textContent).toContain('text 2')
 })
 
 test('region mode: dragging over an existing box draws a new one instead of toggling', async () => {
@@ -142,7 +141,7 @@ test('region mode: "Read all" switches every box on and hides the unsure ones', 
   await findRegionsMode()
   fireEvent.click(screen.getByText('Read all (hide unsure)'))
 
-  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   const kinds = [...document.querySelectorAll('.region')].map((b) => (b.classList.contains('low') ? 'low' : 'on'))
   expect(kinds.sort()).toEqual(['low', 'on']) // region 2 was only 20% sure, so it is hidden
 })
@@ -162,11 +161,11 @@ test('the glossary corrects the output live and is remembered in this browser', 
   fireEvent.click(screen.getByText('Find text regions'))
   await screen.findByText(/all switched off/)
   fireEvent.click(screen.getByText('Read all (hide unsure)'))
-  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
 
   // A rule applies to the text already read, with no new OCR run.
   fireEvent.change(screen.getByLabelText('Glossary'), { target: { value: 'text → TEXT' } })
-  expect(screen.getByLabelText('Extracted text').value).toBe('TEXT 1')
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('TEXT 1')
   expect(screen.getByText(/Glossary corrected 1 character/)).toBeTruthy()
   expect(localStorage.getItem('ocr-glossary')).toBe('text → TEXT')
 
@@ -178,4 +177,22 @@ test('the glossary corrects the output live and is remembered in this browser', 
 
   fireEvent.click(screen.getByText('Clear glossary'))
   expect(localStorage.getItem('ocr-glossary')).toBeNull()
+})
+
+test('clicking a wrong character adds a corrected word to the glossary', async () => {
+  localStorage.clear()
+  render(<OcrTool />)
+  pick()
+  fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
+  fireEvent.click(screen.getByText('Find text regions'))
+  await screen.findByText(/all switched off/)
+  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
+
+  fireEvent.click(document.querySelector('[data-i="0"]')) // the "t"
+  fireEvent.change(screen.getByLabelText('Correct text'), { target: { value: 'T' } })
+  fireEvent.click(screen.getByText(/^Add word:/))
+
+  expect(screen.getByLabelText('Glossary').value).toBe('Tex') // "T" plus two characters of context
+  expect(localStorage.getItem('ocr-glossary')).toBe('Tex')
 })

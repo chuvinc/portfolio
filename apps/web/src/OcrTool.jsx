@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import FixableText from './FixableText'
 import { applyGlossary, parseGlossary } from './glossary'
 import { LANGUAGES, readsRightToLeft } from './languages'
 import {
@@ -10,6 +11,7 @@ import {
   recognize,
   usesRegions,
 } from './ocr'
+import { entriesFromText } from './postprocess'
 import { orderRegions } from './regions'
 
 const IDLE = {
@@ -44,9 +46,11 @@ function regionText(regions, page, language, showLow, glossary) {
     (r) => r.included && r.text && (showLow || r.confidence >= MIN_CONFIDENCE),
   )
   const parts = orderRegions(shown, page.height, readsRightToLeft(language.split('+')[0])).map((r) =>
-    r.entries ? applyGlossary(r.entries, glossary) : { text: r.text, fixed: 0 },
+    r.entries ? applyGlossary(r.entries, glossary) : { entries: entriesFromText(r.text), text: r.text, fixed: 0 },
   )
-  return { text: parts.map((p) => p.text).join('\n\n'), fixed: parts.reduce((n, p) => n + p.fixed, 0) }
+  const blankLine = [{ ch: '\n', conf: 100 }, { ch: '\n', conf: 100 }]
+  const entries = parts.flatMap((p, i) => (i ? [...blankLine, ...p.entries] : p.entries))
+  return { entries, text: entries.map((e) => e.ch).join(''), fixed: parts.reduce((n, p) => n + p.fixed, 0) }
 }
 
 // Boxes over the preview. A short press toggles the smallest box under the pointer;
@@ -153,7 +157,6 @@ export default function OcrTool() {
   const [options, setOptions] = useState({
     language: LANGUAGES[0].id,
     layout: LAYOUTS[0].id,
-    enhance: false,
   })
   const [showLow, setShowLow] = useState(false)
   const [glossaryText, setGlossaryText] = useState(() => {
@@ -218,6 +221,12 @@ export default function OcrTool() {
     document.addEventListener('paste', onPaste)
     return () => document.removeEventListener('paste', onPaste)
   }, [])
+
+  // Adds a line to the glossary (from the click-to-fix panel), skipping ones already there.
+  const addGlossaryLine = (line) => {
+    if (glossaryText.split(/\r?\n/).some((l) => l.trim() === line)) return
+    updateGlossary(glossaryText.trimEnd() ? `${glossaryText.trimEnd()}\n${line}` : line)
+  }
 
   const progress = (id) => (m) => {
     if (run.current === id) setState((s) => ({ ...s, status: m.status, progress: m.progress }))
@@ -296,8 +305,8 @@ export default function OcrTool() {
     setState((s) => {
       if (!s.regions) return s
       if (!usesRegions(next)) return { ...s, regions: null, status: '' }
-      // Read text depends on the language and enhancement; boxes stay.
-      if ('language' in patch || 'enhance' in patch) {
+      // Read text depends on the language; boxes stay.
+      if ('language' in patch) {
         return { ...s, regions: s.regions.map((r) => ({ ...r, text: undefined, entries: undefined, confidence: undefined })), status: '' }
       }
       return s
@@ -314,7 +323,7 @@ export default function OcrTool() {
       ? regionText(state.regions, state.page, options.language, showLow, glossary)
       : state.entries
         ? applyGlossary(state.entries, glossary)
-        : { text: state.text, fixed: 0 }
+        : { entries: entriesFromText(state.text), text: state.text, fixed: 0 }
   const output = shown.text
 
   return (
@@ -401,14 +410,6 @@ export default function OcrTool() {
                 </select>
               </label>
             )}
-            <label>
-              <input
-                type="checkbox"
-                checked={options.enhance}
-                onChange={(e) => changeOptions({ enhance: e.target.checked })}
-              />{' '}
-              Enhance image (upscale, sharpen contrast)
-            </label>
           </div>
           <details className="glossary">
             <summary>Glossary and corrections{glossaryText ? ' (in use)' : ''}</summary>
@@ -490,7 +491,7 @@ export default function OcrTool() {
               </span>
             </label>
           )}
-          <textarea readOnly rows={8} value={output} aria-label="Extracted text" />
+          <FixableText entries={shown.entries} onAdd={addGlossaryLine} />
           {shown.fixed > 0 && (
             <p className="status">
               Glossary corrected {shown.fixed} character{shown.fixed === 1 ? '' : 's'}.
