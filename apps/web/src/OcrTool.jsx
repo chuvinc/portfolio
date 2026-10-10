@@ -25,18 +25,13 @@ const IDLE = {
   activeId: null, // the box being inspected, which can have its own contrast
   page: null,
   brightness: 128, // the picture's average brightness, the pivot for the contrast preview
-  natural: null, // the picture's own width and height, to size the preview
+  edit: null, // text the user rewrote by hand: { from: the text it was made from, text }
   status: '',
   progress: 0,
   error: null,
 }
 
 const GLOSSARY_KEY = 'ocr-glossary' // kept in this browser only, never sent anywhere
-
-// As large as fits: the full width, but never taller than 85% of the window, so a tall narrow
-// picture isn't stretched to thousands of pixels high.
-const previewSize = (natural) =>
-  natural?.w && natural?.h ? { width: `min(100%, ${(85 * natural.w) / natural.h}vh)` } : undefined
 
 const MIN_DRAG = 0.01 // smallest box you can draw, as a share of the image
 const clamp = (n) => Math.min(1, Math.max(0, n))
@@ -180,7 +175,7 @@ function ContrastFilter({ id, factor, brightness }) {
 
 // A close-up of one box with its own contrast slider, for text that needs a different setting from
 // the rest of the page (faded caption, outlined sound effect). Leaving it alone uses the page's.
-function BoxInspector({ region, page, imageUrl, brightness, pageContrast, onContrast }) {
+function BoxInspector({ region, page, imageUrl, brightness, pageContrast, onContrast, onDelete }) {
   const effective = region.contrast ?? pageContrast
   const scale = Math.min(3, 320 / Math.max(region.w, region.h))
   return (
@@ -220,6 +215,9 @@ function BoxInspector({ region, page, imageUrl, brightness, pageContrast, onCont
           </button>
         )}
         <span className="hint">Changing it means this box is read again.</span>
+        <button type="button" className="danger" onClick={onDelete}>
+          Delete this box
+        </button>
       </div>
     </div>
   )
@@ -234,6 +232,8 @@ export default function OcrTool() {
     allowLatin: false,
   })
   const [showLow, setShowLow] = useState(false)
+  const [editing, setEditing] = useState(false) // the text box for rewriting the result by hand is open
+  const [draft, setDraft] = useState('')
   const [glossaryText, setGlossaryText] = useState(() => {
     try {
       return localStorage.getItem(GLOSSARY_KEY) ?? ''
@@ -259,6 +259,7 @@ export default function OcrTool() {
   // Drops the image, preview URL and extracted text from memory.
   const clear = () => {
     run.current += 1 // ignore results from any in-flight run
+    setEditing(false)
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
     previewUrl.current = null
     setState(IDLE)
@@ -314,7 +315,7 @@ export default function OcrTool() {
   // Runs an async step, ignoring its result if the user cleared or restarted meanwhile.
   const guarded = async (start, work) => {
     const id = ++run.current
-    setState((s) => ({ ...s, ...start, error: null, progress: 0 }))
+    setState((s) => ({ ...s, ...start, edit: null, error: null, progress: 0 }))
     try {
       const update = await work(id)
       if (run.current === id) setState((s) => ({ ...s, ...update(s) }))
@@ -362,6 +363,10 @@ export default function OcrTool() {
 
   const toggleRegion = (id) =>
     setState((s) => ({ ...s, activeId: id, regions: s.regions.map((r) => (r.id === id ? { ...r, included: !r.included } : r)) }))
+
+  // Removes a box entirely (its text leaves the result too).
+  const deleteRegion = (id) =>
+    setState((s) => ({ ...s, activeId: null, regions: s.regions.filter((r) => r.id !== id) }))
 
   // Sets one box's own contrast (undefined = follow the page) and clears what was read from it.
   const setRegionContrast = (id, value) =>
@@ -413,7 +418,11 @@ export default function OcrTool() {
       : state.entries
         ? applyGlossary(state.entries, glossary)
         : { entries: entriesFromText(state.text), text: state.text, fixed: 0 }
-  const output = shown.text
+  // A hand edit stands only while the text it was made from is unchanged: toggling a box, a new read
+  // or a glossary change makes it stale, and the app's own text comes back.
+  const edited = state.edit && state.edit.from === shown.text ? state.edit : null
+  const view = edited ? { entries: entriesFromText(edited.text), text: edited.text, fixed: 0 } : shown
+  const output = view.text
 
   return (
     <div className="ocr">
@@ -443,12 +452,11 @@ export default function OcrTool() {
 
       {state.previewUrl && (
         <>
-          <div className="previewBox" style={previewSize(state.natural)}>
+          <div className="previewBox">
             <img
               className="preview"
               src={state.previewUrl}
               alt="Selected for text extraction"
-              onLoad={(e) => setState((s) => ({ ...s, natural: { w: e.target.naturalWidth, h: e.target.naturalHeight } }))}
               style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
             />
             <ContrastFilter id="contrast-preview" factor={options.contrast / 100} brightness={state.brightness} />
@@ -478,6 +486,7 @@ export default function OcrTool() {
               brightness={state.brightness}
               pageContrast={options.contrast}
               onContrast={(value) => setRegionContrast(activeRegion.id, value)}
+              onDelete={() => deleteRegion(activeRegion.id)}
             />
           )}
           <div className="options">
@@ -630,17 +639,63 @@ export default function OcrTool() {
               </span>
             </label>
           )}
-          <FixableText entries={shown.entries} onAdd={addGlossaryLine} />
-          {shown.fixed > 0 && (
-            <p className="status">
-              Glossary corrected {shown.fixed} character{shown.fixed === 1 ? '' : 's'}.
-            </p>
+          {editing ? (
+            <>
+              <textarea
+                rows={8}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                aria-label="Edit extracted text"
+              />
+              <div className="actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setState((s) => ({ ...s, edit: { from: shown.text, text: draft } }))
+                    setEditing(false)
+                  }}
+                >
+                  Save
+                </button>
+                <button type="button" onClick={() => setEditing(false)}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <FixableText entries={view.entries} onAdd={addGlossaryLine} />
+              {view.fixed > 0 && (
+                <p className="status">
+                  Glossary corrected {view.fixed} character{view.fixed === 1 ? '' : 's'}.
+                </p>
+              )}
+              {edited && (
+                <p className="status">
+                  Edited by hand. Reading again, or changing the boxes or glossary, replaces it.
+                </p>
+              )}
+              <div className="actions">
+                <button type="button" onClick={() => navigator.clipboard.writeText(output)}>
+                  Copy text
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(output)
+                    setEditing(true)
+                  }}
+                >
+                  Edit text
+                </button>
+                {edited && (
+                  <button type="button" onClick={() => setState((s) => ({ ...s, edit: null }))}>
+                    Reset to original
+                  </button>
+                )}
+              </div>
+            </>
           )}
-          <div className="actions">
-            <button type="button" onClick={() => navigator.clipboard.writeText(output)}>
-              Copy text
-            </button>
-          </div>
         </>
       )}
     </div>

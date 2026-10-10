@@ -242,3 +242,64 @@ test("a box's own contrast can be reset to follow the page again", async () => {
   expect(screen.queryByText(/Use the page setting/)).toBeNull()
   expect(screen.getByLabelText('Contrast for this box').value).toBe('100')
 })
+
+test('the picture is shown full width, not capped to the window height', async () => {
+  render(<OcrTool />)
+  pick()
+  await screen.findByAltText('Selected for text extraction')
+  expect(document.querySelector('.previewBox').getAttribute('style')).toBeNull()
+})
+
+test('a selected box can be deleted', async () => {
+  const el = await findRegionsMode()
+  expect(document.querySelectorAll('.region')).toHaveLength(2)
+  clickAt(el, 150, 120) // select the first box
+  fireEvent.click(await screen.findByText('Delete this box'))
+
+  expect(document.querySelectorAll('.region')).toHaveLength(1)
+  expect(screen.queryByLabelText('Contrast for this box')).toBeNull() // nothing is selected any more
+})
+
+async function readFirstBox() {
+  const el = await findRegionsMode()
+  clickAt(el, 150, 120) // switch the first box on
+  fireEvent.click(screen.getByText('Read 1 region'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
+  return el
+}
+
+test('the result can be edited by hand, and reset', async () => {
+  await readFirstBox()
+  fireEvent.click(screen.getByText('Edit text'))
+  const box = screen.getByLabelText('Edit extracted text')
+  expect(box.value).toBe('text 1') // starts from the current text
+  fireEvent.change(box, { target: { value: 'text one joined' } })
+  fireEvent.click(screen.getByText('Save'))
+
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('text one joined')
+  expect(screen.getByText(/Edited by hand/)).toBeTruthy()
+
+  fireEvent.click(screen.getByText('Reset to original'))
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1')
+  expect(screen.queryByText(/Edited by hand/)).toBeNull()
+})
+
+test('cancelling an edit changes nothing', async () => {
+  await readFirstBox()
+  fireEvent.click(screen.getByText('Edit text'))
+  fireEvent.change(screen.getByLabelText('Edit extracted text'), { target: { value: 'oops' } })
+  fireEvent.click(screen.getByText('Cancel'))
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1')
+})
+
+test('a hand edit gives way when the text it was made from changes', async () => {
+  const el = await readFirstBox()
+  fireEvent.click(screen.getByText('Edit text'))
+  fireEvent.change(screen.getByLabelText('Edit extracted text'), { target: { value: 'rewritten' } })
+  fireEvent.click(screen.getByText('Save'))
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('rewritten')
+
+  clickAt(el, 150, 120) // switch the box off: the underlying text changes
+  expect(screen.getByLabelText('Extracted text').textContent).not.toBe('rewritten')
+  expect(screen.queryByText(/Edited by hand/)).toBeNull()
+})
