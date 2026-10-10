@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { applyGlossary, parseGlossary } from './glossary'
 import { LANGUAGES, readsRightToLeft } from './languages'
 import {
   LAYOUTS,
@@ -15,6 +16,7 @@ const IDLE = {
   image: null,
   previewUrl: null,
   text: '',
+  entries: null, // whole-image reads: characters with confidence, for the glossary
   detected: null,
   regions: null, // text groups on the page, in image pixels (region mode only)
   page: null,
@@ -22,6 +24,8 @@ const IDLE = {
   progress: 0,
   error: null,
 }
+
+const GLOSSARY_KEY = 'ocr-glossary' // kept in this browser only, never sent anywhere
 
 const MIN_DRAG = 0.01 // smallest box you can draw, as a share of the image
 const clamp = (n) => Math.min(1, Math.max(0, n))
@@ -35,13 +39,14 @@ function describe({ direction, lines, psm, language }) {
 
 // Text of the regions that are switched on, in reading order. Regions Tesseract was
 // unsure of (likely ghost text) are left out unless asked for.
-function regionText(regions, page, language, showLow) {
+function regionText(regions, page, language, showLow, glossary) {
   const shown = regions.filter(
     (r) => r.included && r.text && (showLow || r.confidence >= MIN_CONFIDENCE),
   )
-  return orderRegions(shown, page.height, readsRightToLeft(language.split('+')[0]))
-    .map((r) => r.text)
-    .join('\n\n')
+  const parts = orderRegions(shown, page.height, readsRightToLeft(language.split('+')[0])).map((r) =>
+    r.entries ? applyGlossary(r.entries, glossary) : { text: r.text, fixed: 0 },
+  )
+  return { text: parts.map((p) => p.text).join('\n\n'), fixed: parts.reduce((n, p) => n + p.fixed, 0) }
 }
 
 // Boxes over the preview. A short press toggles the smallest box under the pointer;
@@ -151,6 +156,23 @@ export default function OcrTool() {
     enhance: false,
   })
   const [showLow, setShowLow] = useState(false)
+  const [glossaryText, setGlossaryText] = useState(() => {
+    try {
+      return localStorage.getItem(GLOSSARY_KEY) ?? ''
+    } catch {
+      return '' // storage blocked: the glossary just won't persist
+    }
+  })
+  const glossary = useMemo(() => parseGlossary(glossaryText), [glossaryText])
+  const updateGlossary = (value) => {
+    setGlossaryText(value)
+    try {
+      if (value) localStorage.setItem(GLOSSARY_KEY, value)
+      else localStorage.removeItem(GLOSSARY_KEY)
+    } catch {
+      // see above
+    }
+  }
   const [sensitivity, setSensitivity] = useState('normal')
   const previewUrl = useRef(null)
   const run = useRef(0)
@@ -214,9 +236,9 @@ export default function OcrTool() {
   }
 
   const extract = () =>
-    guarded({ text: '', detected: null, status: 'starting' }, async (id) => {
-      const { text, detected } = await recognize(state.image, options, progress(id))
-      return () => ({ text, detected, status: 'done', progress: 1 })
+    guarded({ text: '', entries: null, detected: null, status: 'starting' }, async (id) => {
+      const { text, entries, detected } = await recognize(state.image, options, progress(id))
+      return () => ({ text, entries: entries ?? null, detected, status: 'done', progress: 1 })
     })
 
   const findRegions = () =>
@@ -236,7 +258,7 @@ export default function OcrTool() {
         progress: 1,
         regions: s.regions.map((r) => {
           const hit = results.find((x) => x.id === r.id)
-          return hit ? { ...r, text: hit.text, confidence: hit.confidence } : r
+          return hit ? { ...r, text: hit.text, entries: hit.entries, confidence: hit.confidence } : r
         }),
       })
     })
@@ -276,7 +298,7 @@ export default function OcrTool() {
       if (!usesRegions(next)) return { ...s, regions: null, status: '' }
       // Read text depends on the language and enhancement; boxes stay.
       if ('language' in patch || 'enhance' in patch) {
-        return { ...s, regions: s.regions.map((r) => ({ ...r, text: undefined, confidence: undefined })), status: '' }
+        return { ...s, regions: s.regions.map((r) => ({ ...r, text: undefined, entries: undefined, confidence: undefined })), status: '' }
       }
       return s
     })
@@ -287,7 +309,13 @@ export default function OcrTool() {
   const pending = state.regions?.filter((r) => r.included && r.text === undefined).length ?? 0
   const regionsRead = state.regions?.some((r) => r.text !== undefined)
   const hasOutput = regionMode ? regionsRead : state.status === 'done'
-  const output = regionMode && state.regions ? regionText(state.regions, state.page, options.language, showLow) : state.text
+  const shown =
+    regionMode && state.regions
+      ? regionText(state.regions, state.page, options.language, showLow, glossary)
+      : state.entries
+        ? applyGlossary(state.entries, glossary)
+        : { text: state.text, fixed: 0 }
+  const output = shown.text
 
   return (
     <div className="ocr">
@@ -382,6 +410,29 @@ export default function OcrTool() {
               Enhance image (upscale, sharpen contrast)
             </label>
           </div>
+          <details className="glossary">
+            <summary>Glossary and corrections{glossaryText ? ' (in use)' : ''}</summary>
+            <p className="status">
+              One entry per line. A word or name you expect fixes near-misses: if the text is one
+              character off it, and the engine was unsure of that character, your spelling wins.
+              A line like <code>ロ → 口</code> always replaces the left side with the right.
+              Lines starting with # are notes. Saved in this browser only.
+            </p>
+            <textarea
+              rows={6}
+              value={glossaryText}
+              onChange={(e) => updateGlossary(e.target.value)}
+              placeholder={'ワンピース\nロ → 口\n# character names go here'}
+              aria-label="Glossary"
+            />
+            {glossaryText && (
+              <div className="actions">
+                <button type="button" onClick={() => updateGlossary('')}>
+                  Clear glossary
+                </button>
+              </div>
+            )}
+          </details>
           <div className="actions">
             {!regionMode && (
               <button type="button" onClick={extract} disabled={busy}>
@@ -440,6 +491,11 @@ export default function OcrTool() {
             </label>
           )}
           <textarea readOnly rows={8} value={output} aria-label="Extracted text" />
+          {shown.fixed > 0 && (
+            <p className="status">
+              Glossary corrected {shown.fixed} character{shown.fixed === 1 ? '' : 's'}.
+            </p>
+          )}
           <div className="actions">
             <button type="button" onClick={() => navigator.clipboard.writeText(output)}>
               Copy text

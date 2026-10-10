@@ -156,6 +156,9 @@ function isAnnotationOf(a, b) {
   const small = median(a.members.map(size))
   const big = median(b.members.map(size))
   if (small > big * ANNOTATION_SIZE) return false
+  // Beside the bigger group, not inside its bounds (that would be a gap in a bigger drawing).
+  const shared = overlap(a.minX, a.maxX, b.minX, b.maxX) * overlap(a.minY, a.maxY, b.minY, b.maxY)
+  if (shared > 0.2 * (a.maxX - a.minX + 1) * (a.maxY - a.minY + 1)) return false
   const reach = big * ANNOTATION_REACH
   const xGap = Math.max(a.minX, b.minX) - Math.min(a.maxX, b.maxX)
   const yGap = Math.max(a.minY, b.minY) - Math.min(a.maxY, b.maxY)
@@ -258,17 +261,24 @@ export function findRegions(image, sensitivity = 'normal') {
     }
   }
 
-  groups = groups.filter((g) => looksLikeText(g, cfg))
+  // Only groups that will really become boxes count, both as text and as the thing an
+  // annotation sits beside: a page-sized junk group must not swallow the text inside it.
+  const boxArea = (g) => (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
+  groups = groups.filter((g) => {
+    const density = g.area / boxArea(g)
+    return (
+      looksLikeText(g, cfg) &&
+      boxArea(g) >= cfg.minArea * width * height &&
+      boxArea(g) <= MAX_REGION_SHARE * width * height &&
+      density <= MAX_DENSITY &&
+      density >= MIN_DENSITY
+    )
+  })
   groups = groups.filter((a) => !groups.some((b) => b !== a && isAnnotationOf(a, b)))
 
   const pad = Math.round(glyph * PAD)
   const regions = []
   for (const g of groups) {
-    const boxArea = (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
-    const density = g.area / boxArea
-    if (boxArea < cfg.minArea * width * height || boxArea > MAX_REGION_SHARE * width * height) continue
-    if (density > MAX_DENSITY || density < MIN_DENSITY) continue
-
     let { direction, lines, psm } = analyzeInk(crop(image, g))
     const strip = stripDirection(g.members, glyph)
     if (strip && strip !== direction) {

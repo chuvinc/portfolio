@@ -190,3 +190,23 @@ test('furigana-sized marks beside a column are absorbed, not boxed on their own'
   expect(regions[0].h).toBeGreaterThan(8 * 13)
   expect(regions[0].w).toBeLessThan(30) // the box is the column, not the readings next to it
 })
+
+test('a page-sized junk group does not swallow real text inside its bounds', () => {
+  const img = blank(600, 600)
+  // A dense grid of large shapes covering most of the page. It forms one big group that is
+  // later thrown out for being the whole page, with a clear hole in the middle...
+  for (let gx = 0; gx < 16; gx++) {
+    for (let gy = 0; gy < 16; gy++) {
+      const x = 20 + gx * 35
+      const y = 20 + gy * 35
+      if (x > 245 && x < 385 && y > 60 && y < 320) continue // the hole
+      ring(img, x, y, 30)
+    }
+  }
+  // ...where a real column of text sits, inside the grid's bounding box.
+  column(img, 300, 120, 6)
+
+  const regions = findRegions(img)
+  const col = regions.find((r) => r.direction === 'vertical' && r.x > 250 && r.x < 380)
+  expect(col).toBeTruthy()
+})

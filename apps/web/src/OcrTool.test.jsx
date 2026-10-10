@@ -21,7 +21,11 @@ vi.mock('./ocr', () => ({
     ],
   })),
   readRegions: vi.fn(async (_image, regions) =>
-    regions.map((r) => ({ id: r.id, text: `text ${r.id}`, confidence: r.id === 2 ? 20 : 90, language: 'eng' })),
+    regions.map((r) => {
+      const text = `text ${r.id}`
+      const confidence = r.id === 2 ? 20 : 90
+      return { id: r.id, text, entries: Array.from(text, (ch) => ({ ch, conf: confidence })), confidence, language: 'eng' }
+    }),
   ),
   classifyRegion: vi.fn(async () => ({ direction: 'horizontal', lines: 1, psm: '7' })),
 }))
@@ -148,4 +152,30 @@ test('the language dropdown offers Japanese', () => {
   pick()
   const options = [...screen.getByLabelText(/Language/).querySelectorAll('option')].map((o) => o.textContent)
   expect(options).toEqual(['Japanese'])
+})
+
+test('the glossary corrects the output live and is remembered in this browser', async () => {
+  localStorage.clear()
+  const first = render(<OcrTool />)
+  pick()
+  fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
+  fireEvent.click(screen.getByText('Find text regions'))
+  await screen.findByText(/all switched off/)
+  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').value).toBe('text 1'))
+
+  // A rule applies to the text already read, with no new OCR run.
+  fireEvent.change(screen.getByLabelText('Glossary'), { target: { value: 'text → TEXT' } })
+  expect(screen.getByLabelText('Extracted text').value).toBe('TEXT 1')
+  expect(screen.getByText(/Glossary corrected 1 character/)).toBeTruthy()
+  expect(localStorage.getItem('ocr-glossary')).toBe('text → TEXT')
+
+  // It comes back after a reload.
+  first.unmount()
+  render(<OcrTool />)
+  pick()
+  expect(screen.getByLabelText('Glossary').value).toBe('text → TEXT')
+
+  fireEvent.click(screen.getByText('Clear glossary'))
+  expect(localStorage.getItem('ocr-glossary')).toBeNull()
 })

@@ -204,3 +204,12 @@ footer {
   background: rgba(0, 0, 0, 0.65);
 }
 
+
+.glossary summary {
+  cursor: pointer;
+  color: var(--text-h);
+}
+
+.glossary textarea {
+  margin-top: 8px;
+}

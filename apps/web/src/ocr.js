@@ -1,6 +1,6 @@
 import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
-import { fixVerticalDashes, tidyText } from './languages'
+import { cleanEntries, entriesFromData, entriesToText } from './postprocess'
 import { enhanceImage } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
@@ -61,7 +61,12 @@ async function readBest(attempts) {
   return best
 }
 
-const withDashFix = (r) => (r.direction === 'vertical' ? { ...r, text: fixVerticalDashes(r.text) } : r)
+// Tidies a read result's characters (spaces between kana, stray bars in vertical text) and adds
+// its text. The characters keep their confidence so a glossary can use it later.
+const finish = (r) => {
+  const entries = cleanEntries(r.entries, { vertical: r.direction === 'vertical' })
+  return { ...r, entries, text: entriesToText(entries) }
+}
 
 // Finds candidate text groups on a page. Returns { regions, page } in the image's own pixels.
 export async function findTextRegions(image, sensitivity) {
@@ -70,7 +75,8 @@ export async function findTextRegions(image, sensitivity) {
 }
 
 // Reads each region on its own. Japanese is assumed vertical first, and horizontal is tried
-// only if that read isn't confident. Resolves to [{ id, text, confidence, language }].
+// only if that read isn't confident. Resolves to [{ id, text, entries, confidence, language }],
+// where `entries` are the characters with their confidence (see postprocess.js).
 // Regions need { id, x, y, w, h, direction, lines, psm }.
 export async function readRegions(image, regions, { language = 'eng', enhance = false } = {}, onProgress) {
   const pool = workerPool()
@@ -81,8 +87,8 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
     await worker.setParameters({ tessedit_pageseg_mode: psm })
     let crop = await cropRegion(image, box, upscaleFor(unit))
     if (enhance) crop = await enhanceImage(crop)
-    const { data } = await worker.recognize(crop)
-    return { text: tidyText(data.text).trim(), confidence: data.confidence }
+    const { data } = await worker.recognize(crop, {}, { text: true, blocks: true })
+    return { entries: entriesFromData(data), confidence: data.confidence }
   }
 
   // Tesseract struggles to split and order vertical columns itself, so read each column
@@ -94,8 +100,9 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
       const box = { x: col.x - slack, y: region.y, w: col.w + slack * 2, h: region.h }
       reads.push(await read('jpn_vert', PSM.SINGLE_BLOCK_VERT_TEXT, box, { w: col.w, h: region.h, lines: 1, direction: 'vertical' }))
     }
+    const columns = reads.map((d) => cleanEntries(d.entries, { vertical: true })).filter((e) => e.length)
     return {
-      text: reads.map((d) => d.text).filter(Boolean).join('\n'),
+      entries: columns.flatMap((e, i) => (i ? [{ ch: '\n', conf: 100 }, ...e] : e)),
       confidence: reads.reduce((sum, d) => sum + d.confidence, 0) / reads.length,
     }
   }
@@ -107,7 +114,7 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
       if (language === 'jpn') {
         const horizontalPsm = region.direction === 'horizontal' ? region.psm : region.lines <= 1 ? PSM.SINGLE_LINE : PSM.SINGLE_BLOCK
         const unit = (direction, lines) => ({ ...region, direction, lines })
-        best = withDashFix(
+        best = finish(
           await readBest([
             {
               direction: 'vertical',
@@ -125,9 +132,9 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
           ]),
         )
       } else {
-        best = { ...(await read(language, region.psm, region, region)), language }
+        best = finish({ ...(await read(language, region.psm, region, region)), language })
       }
-      results.push({ id: region.id, text: best.text, confidence: best.confidence, language: best.language })
+      results.push({ id: region.id, text: best.text, entries: best.entries, confidence: best.confidence, language: best.language })
     }
   } finally {
     await pool.close()
@@ -136,7 +143,7 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
 }
 
 // Extracts text from a whole image Blob/File in one pass, entirely in the browser.
-// Resolves to { text, detected }, where `detected` describes what was used (or null).
+// Resolves to { text, entries, detected }, where `detected` describes what was used (or null).
 // Nothing is uploaded, and cacheMethod 'none' keeps tesseract from writing to IndexedDB.
 export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT, enhance = false } = {}, onProgress) {
   if (enhance) {
@@ -154,20 +161,20 @@ export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT,
   const read = async (lang, psm) => {
     const worker = await pool.get(lang)
     await worker.setParameters({ tessedit_pageseg_mode: psm })
-    const { data } = await worker.recognize(image)
-    return { text: tidyText(data.text), confidence: data.confidence }
+    const { data } = await worker.recognize(image, {}, { text: true, blocks: true })
+    return { entries: entriesFromData(data), confidence: data.confidence }
   }
 
   try {
     if (language !== 'jpn') {
       const psm = geometry ? geometry.psm : layout
-      const { text } = await read(language, psm)
-      return { text, detected: geometry && { direction: geometry.direction, lines: geometry.lines, psm, language } }
+      const { text, entries } = finish(await read(language, psm))
+      return { text, entries, detected: geometry && { direction: geometry.direction, lines: geometry.lines, psm, language } }
     }
 
     // Japanese: assume vertical first, and fall back to horizontal if that read isn't confident.
     const horizontalPsm = geometry ? (geometry.direction === 'horizontal' ? geometry.psm : PSM.AUTO) : layout
-    const best = withDashFix(
+    const best = finish(
       await readBest([
         { direction: 'vertical', language: 'jpn_vert', run: () => read('jpn_vert', PSM.SINGLE_BLOCK_VERT_TEXT) },
         { direction: 'horizontal', language: 'jpn', run: () => read('jpn', horizontalPsm) },
@@ -175,6 +182,7 @@ export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT,
     )
     return {
       text: best.text,
+      entries: best.entries,
       detected: {
         direction: best.direction,
         lines: geometry?.lines ?? 1,
