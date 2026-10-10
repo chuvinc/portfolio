@@ -63,15 +63,15 @@ const bar = (img, x, y, len = 10, thick = 2) => {
   for (let yy = y; yy < y + len; yy++) for (let xx = x; xx < x + thick; xx++) img.data[(yy * img.width + xx) * 4] = 0
 }
 
-test('a group of wildly different blob sizes (artwork) is not text', () => {
+test('strict rejects a group of wildly different blob sizes (artwork)', () => {
   const img = blank(600, 300)
-  const sizes = [6, 40, 12, 60, 50, 45, 8]
+  const sizes = [60, 12, 55, 10, 65, 14, 58, 9] // big and small shapes alternating
   let x = 20
   for (const s of sizes) {
     ring(img, x, 20, s)
     x += s + 5
   }
-  expect(findRegions(img)).toEqual([])
+  expect(findRegions(img, 'strict')).toEqual([])
 })
 
 test('two columns split by a wide gap are one text area', () => {
@@ -156,4 +156,37 @@ test('sensitivity trades junk boxes for missed text', () => {
   expect(count('strict')).toBeLessThanOrEqual(count('normal'))
   expect(count('normal')).toBeLessThanOrEqual(count('loose'))
   expect(count('loose')).toBeGreaterThan(count('strict')) // loose finds the two-glyph pair strict ignores
+})
+
+// A glyph drawn in two pieces, like a kanji with a separate radical.
+function pieces(img, x, y) {
+  ring(img, x, y, 12)
+  ring(img, x + 2, y + 14, 7)
+}
+
+test('vertical text whose glyphs split into pieces of different sizes is still found', () => {
+  const img = blank(300, 400)
+  for (let i = 0; i < 6; i++) pieces(img, 150, 40 + i * 26)
+  const regions = findRegions(img)
+  expect(regions).toHaveLength(1)
+  expect(regions[0].direction).toBe('vertical')
+})
+
+test('two short columns of two glyphs each join into one vertical text area', () => {
+  const img = blank(300, 300)
+  column(img, 200, 60, 2)
+  column(img, 200 - 20, 60, 2) // the neighbouring column, to its left
+  const regions = findRegions(img)
+  expect(regions).toHaveLength(1)
+  expect(regions[0].direction).toBe('vertical')
+})
+
+test('furigana-sized marks beside a column are absorbed, not boxed on their own', () => {
+  const img = blank(300, 400)
+  column(img, 150, 40, 8)
+  for (let i = 0; i < 10; i++) ring(img, 166, 40 + i * 9, 5) // small readings next to the column
+  const regions = findRegions(img)
+  expect(regions).toHaveLength(1)
+  expect(regions[0].h).toBeGreaterThan(8 * 13)
+  expect(regions[0].w).toBeLessThan(30) // the box is the column, not the readings next to it
 })

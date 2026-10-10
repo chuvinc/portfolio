@@ -23,10 +23,6 @@ const IDLE = {
   error: null,
 }
 
-// Which way the text was read: the model used, not the shape guess.
-const readAs = (language) =>
-  language === 'jpn_vert' ? 'read as vertical' : language === 'jpn' ? 'read as horizontal' : 'read as horizontal text'
-
 const MIN_DRAG = 0.01 // smallest box you can draw, as a share of the image
 const clamp = (n) => Math.min(1, Math.max(0, n))
 
@@ -444,21 +440,6 @@ export default function OcrTool() {
             </label>
           )}
           <textarea readOnly rows={8} value={output} aria-label="Extracted text" />
-          {regionMode && state.regions && (
-            <details>
-              <summary>What was read from each region</summary>
-              <ul className="results">
-                {state.regions
-                  .filter((r) => r.included && r.text !== undefined)
-                  .map((r) => (
-                    <li key={r.id}>
-                      <strong>#{r.id}</strong> {readAs(r.language)}, {Math.round(r.confidence)}% sure
-                      {r.columns ? `, ${r.columns.length} columns` : ''}: {r.text || '(nothing)'}
-                    </li>
-                  ))}
-              </ul>
-            </details>
-          )}
           <div className="actions">
             <button type="button" onClick={() => navigator.clipboard.writeText(output)}>
               Copy text

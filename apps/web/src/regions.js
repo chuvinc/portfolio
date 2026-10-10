@@ -4,16 +4,24 @@ import { binarize } from './preprocess'
 
 const ANALYSIS_EDGE = 1000 // long edge of the copy we analyse
 const MIN_SPECK = 3 // ignore ink blobs smaller than this many pixels
-const GAP_FACTOR = 1.2 // two blobs closer than this many (smaller blob) sizes are one group
+// Two ink blobs are one group if they are close in BOTH directions, measured in units of the
+// smaller blob. Glyphs stacked in a column sit tight against each other, while neighbouring
+// columns are further apart, so the allowance is generous along a column and tighter across.
+const ALONG = 1.4 // vertical gap allowed (down a column)
+const ACROSS = 0.6 // horizontal gap allowed (between neighbouring columns)
+const MAX_GROUPS = 600 // cap on fragments carried into the merge pass, so noisy pages stay fast
 const MAX_REGION_SHARE = 0.6 // a box covering more than this share of the page is the page, not text
 const SAME_SIZE = [0.6, 1.67] // groups merge only if their glyphs are this close in size
 const MIN_BLOBS = 3 // fixed floor used when judging a run of glyphs (see SENSITIVITY for groups)
 // How picky detection is about what counts as text. "strict" drops more junk but may miss
 // small or odd text; "loose" keeps more, at the cost of more junk boxes to switch off.
 const SENSITIVITY = {
-  strict: { minGlyphs: 4, uniform: 0.7, minArea: 0.0012 },
-  normal: { minGlyphs: 3, uniform: 0.6, minArea: 0.0008 },
-  loose: { minGlyphs: 2, uniform: 0.45, minArea: 0.0004 },
+  // `spread`: a blob counts as glyph-sized within this range of the group's median size.
+  // Japanese glyphs often split into pieces (radicals, dakuten, furigana), so normal and
+  // loose are generous; strict keeps sizes tight.
+  strict: { minGlyphs: 4, uniform: 0.65, minArea: 0.0012, spread: [0.4, 2.5] },
+  normal: { minGlyphs: 3, uniform: 0.5, minArea: 0.0008, spread: [0.3, 3] },
+  loose: { minGlyphs: 2, uniform: 0.4, minArea: 0.0004, spread: [0.25, 3.5] },
 }
 const MAX_DENSITY = 0.65 // ink share of the group's box; above this it's a solid picture
 const MIN_DENSITY = 0.02 // ...and below this it's a stray line or smudge
@@ -83,8 +91,7 @@ function crop({ data, width }, box) {
   return { data: out, width: w, height: h }
 }
 
-const SIZE_SPREAD = [0.4, 2.5] // a glyph is this far (x median) from the group's median size at most
-const MAX_DOMINANT = 0.6 // one blob holding more than this share of a group's ink is a drawing
+const MAX_DOMINANT = 0.7 // one blob holding more than this share of a group's ink is a drawing
 const MERGE_GAP = 1.6 // sibling groups within this many glyphs (and lined up) are one text area
 const MERGE_OVERLAP = 0.6 // ...if they overlap this much along the shared edge
 const STRIP_SPREAD = 3 // glyph centres spread this much more along one axis = one strip of text
@@ -114,13 +121,16 @@ function typicalGlyph(blobs) {
 }
 
 // Text is made of similar-sized glyphs; drawings are one big shape or a mix of sizes.
-function looksLikeText(g, { minGlyphs, uniform }) {
+function looksLikeText(g, { minGlyphs, uniform, spread }) {
   if (g.members.length < minGlyphs) return false
   const m = median(g.members.map(size))
-  const similar = g.members.filter((b) => size(b) >= m * SIZE_SPREAD[0] && size(b) <= m * SIZE_SPREAD[1])
+  const similar = g.members.filter((b) => size(b) >= m * spread[0] && size(b) <= m * spread[1])
   if (similar.length < minGlyphs || similar.length / g.members.length < uniform) return false
   return Math.max(...g.members.map((b) => b.area)) / g.area <= MAX_DOMINANT
 }
+
+const ANNOTATION_SIZE = 0.65 // a group this much smaller than its neighbour, sitting right beside it...
+const ANNOTATION_REACH = 0.8 // ...within this many neighbour-glyphs, and lined up with it, is a reading aid
 
 const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0) + 1)
 
@@ -138,6 +148,20 @@ function sameTextArea(a, b, reach) {
 const comparable = (a, b) => {
   const ratio = median(a.members.map(size)) / median(b.members.map(size))
   return ratio >= SAME_SIZE[0] && ratio <= SAME_SIZE[1]
+}
+
+// Furigana (small readings printed beside a column or above a line) is a reading aid, not text
+// to read: small glyphs running alongside a bigger group, within its extent, are annotations.
+function isAnnotationOf(a, b) {
+  const small = median(a.members.map(size))
+  const big = median(b.members.map(size))
+  if (small > big * ANNOTATION_SIZE) return false
+  const reach = big * ANNOTATION_REACH
+  const xGap = Math.max(a.minX, b.minX) - Math.min(a.maxX, b.maxX)
+  const yGap = Math.max(a.minY, b.minY) - Math.min(a.maxY, b.maxY)
+  const yShare = overlap(a.minY, a.maxY, b.minY, b.maxY) / (a.maxY - a.minY + 1)
+  const xShare = overlap(a.minX, a.maxX, b.minX, b.maxX) / (a.maxX - a.minX + 1)
+  return (xGap <= reach && yShare >= 0.8) || (yGap <= reach && xShare >= 0.8)
 }
 
 function mergeGroups(a, b) {
@@ -181,7 +205,7 @@ export function findRegions(image, sensitivity = 'normal') {
 
   const glyph = typicalGlyph(blobs)
 
-  // Union blobs whose boxes are within a gap set by the SMALLER of the two, so a drawing
+  // Union blobs whose boxes are close, with the gap set by the SMALLER of the two so a drawing
   // next to text can't pull the text towards it. Sweep over x for speed.
   blobs.sort((a, b) => a.minX - b.minX)
   const parent = blobs.map((_, i) => i)
@@ -191,12 +215,14 @@ export function findRegions(image, sensitivity = 'normal') {
   }
   for (let i = 0; i < blobs.length; i++) {
     for (let j = i + 1; j < blobs.length; j++) {
-      if (blobs[j].minX > blobs[i].maxX + GAP_FACTOR * size(blobs[i])) break
-      const gap = Math.max(2, GAP_FACTOR * Math.min(size(blobs[i]), size(blobs[j])))
+      if (blobs[j].minX > blobs[i].maxX + Math.max(2, ACROSS * size(blobs[i]))) break
+      const small = Math.min(size(blobs[i]), size(blobs[j]))
+      const across = Math.max(2, ACROSS * small)
+      const along = Math.max(2, ALONG * small)
       if (
-        blobs[j].minX <= blobs[i].maxX + gap &&
-        blobs[j].minY <= blobs[i].maxY + gap &&
-        blobs[i].minY <= blobs[j].maxY + gap
+        blobs[j].minX <= blobs[i].maxX + across &&
+        blobs[j].minY <= blobs[i].maxY + along &&
+        blobs[i].minY <= blobs[j].maxY + along
       ) {
         parent[find(j)] = find(i)
       }
@@ -211,8 +237,13 @@ export function findRegions(image, sensitivity = 'normal') {
     else grouped.set(root, { ...b, members: [b] })
   })
 
-  // Keep text-like groups, then join siblings that are one text area split by a wide gap.
-  let groups = [...grouped.values()].filter((g) => looksLikeText(g, cfg))
+  // Short columns (a bubble with one or two characters) are too small to judge alone, so keep
+  // any fragment of two or more glyphs, join siblings that are one text area split by a gap,
+  // and only then ask whether the joined group looks like text.
+  let groups = [...grouped.values()]
+    .filter((g) => g.members.length >= 2)
+    .sort((a, b) => b.members.length - a.members.length)
+    .slice(0, MAX_GROUPS)
   for (let merged = true; merged; ) {
     merged = false
     outer: for (let i = 0; i < groups.length; i++) {
@@ -226,6 +257,9 @@ export function findRegions(image, sensitivity = 'normal') {
       }
     }
   }
+
+  groups = groups.filter((g) => looksLikeText(g, cfg))
+  groups = groups.filter((a) => !groups.some((b) => b !== a && isAnnotationOf(a, b)))
 
   const pad = Math.round(glyph * PAD)
   const regions = []
