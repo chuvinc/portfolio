@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { PSM } from 'tesseract.js'
-import { findRegions, orderRegions, upscaleFor } from './regions'
+import { cropPadding, findRegions, glyphSize, orderRegions, upscaleFor } from './regions'
 
 function blank(width, height) {
   return { data: new Uint8ClampedArray(width * height * 4).fill(255), width, height }
@@ -209,4 +209,65 @@ test('a page-sized junk group does not swallow real text inside its bounds', () 
   const regions = findRegions(img)
   const col = regions.find((r) => r.direction === 'vertical' && r.x > 250 && r.x < 380)
   expect(col).toBeTruthy()
+})
+
+// ---- Regressions found by running the real app on rendered Japanese pages ----
+
+// A small blob (a dakuten dot).
+const dot = (img, x, y) => ring(img, x, y, 4)
+
+test('a first glyph with dakuten dots is part of its column, not dropped as furigana', () => {
+  // The real case: ど (a body plus two dots) above こ, whose first stroke is small and sits 31px away.
+  const img = blank(300, 500)
+  ring(img, 100, 20, 34) // the glyph body
+  dot(img, 136, 20) // two tiny dots beside it
+  dot(img, 142, 26)
+  ring(img, 104, 85, 22) // the next glyph's first (small) stroke, a wide gap below
+  for (let i = 0; i < 6; i++) ring(img, 100, 130 + i * 40, 34) // the rest of the column
+  const regions = findRegions(img)
+  expect(regions).toHaveLength(1)
+  expect(regions[0].y).toBeLessThan(20) // the box starts at the first glyph
+  expect(regions[0].y + regions[0].h).toBeGreaterThan(130 + 5 * 40)
+})
+
+test('glyphSize follows the glyph bodies, so dakuten dots do not make a group look tiny', () => {
+  const blob = (size) => ({ minX: 0, maxX: size - 1, minY: 0, maxY: size - 1 })
+  // A body plus two dots: the median blob is 4px (looks like furigana), the glyph is 34px.
+  expect(glyphSize({ members: [blob(34), blob(4), blob(4)] })).toBe(34)
+  // Genuine furigana stays small.
+  expect(glyphSize({ members: [blob(12), blob(11), blob(13), blob(12)] })).toBeLessThanOrEqual(13)
+})
+
+test('text filling a tightly cropped image is still found, not thrown out as "the page"', () => {
+  const img = blank(70, 116)
+  for (const x of [6, 30, 54]) column(img, x, 6, 8) // three columns that fill most of the image
+  const regions = findRegions(img)
+  expect(regions.length).toBeGreaterThanOrEqual(1)
+  for (const x of [6, 30, 54]) {
+    expect(regions.some((r) => r.x <= x && r.x + r.w >= x + 10)).toBe(true) // every column is inside a box
+  }
+})
+
+test('glyphs with wide gaps between them (single strokes) still form one line', () => {
+  const img = blank(300, 60)
+  for (let i = 0; i < 8; i++) ring(img, 10 + i * 26, 20, 12) // 14px gaps: wider than the linking reach
+  const regions = findRegions(img)
+  expect(regions).toHaveLength(1)
+  expect(regions[0].direction).toBe('horizontal')
+  expect(regions[0].w).toBeGreaterThan(8 * 20)
+})
+
+test('a vertical block of several columns reports its columns', () => {
+  const img = blank(120, 200)
+  for (const x of [10, 34, 58]) column(img, x, 10, 8)
+  const [region] = findRegions(img)
+  expect(region.direction).toBe('vertical')
+  expect(region.columns).toHaveLength(3)
+  expect(region.lines).toBeGreaterThanOrEqual(3)
+})
+
+test('crop padding follows the short side, so a tall column does not reach its neighbour', () => {
+  expect(cropPadding(81, 910)).toBeLessThanOrEqual(8)
+  expect(cropPadding(910, 81)).toBeLessThanOrEqual(8)
+  expect(cropPadding(100, 100)).toBe(7)
 })

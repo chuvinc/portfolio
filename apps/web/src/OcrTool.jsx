@@ -12,6 +12,7 @@ import {
   usesRegions,
 } from './ocr'
 import { entriesFromText } from './postprocess'
+import { brightnessOf } from './preprocess'
 import { orderRegions } from './regions'
 
 const IDLE = {
@@ -22,6 +23,7 @@ const IDLE = {
   detected: null,
   regions: null, // text groups on the page, in image pixels (region mode only)
   page: null,
+  brightness: 128, // the picture's average brightness, the pivot for the contrast preview
   status: '',
   progress: 0,
   error: null,
@@ -152,12 +154,29 @@ function RegionOverlay({ regions, page, showLow, onToggle, onAdd }) {
   )
 }
 
+// The contrast applied to the preview, as an SVG filter so it matches what gets read:
+// out = (in - brightness) * factor + brightness, per colour channel.
+function ContrastFilter({ factor, brightness }) {
+  const intercept = (brightness * (1 - factor)) / 255
+  return (
+    <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}>
+      <filter id="contrast-preview" colorInterpolationFilters="sRGB">
+        <feComponentTransfer>
+          <feFuncR type="linear" slope={factor} intercept={intercept} />
+          <feFuncG type="linear" slope={factor} intercept={intercept} />
+          <feFuncB type="linear" slope={factor} intercept={intercept} />
+        </feComponentTransfer>
+      </filter>
+    </svg>
+  )
+}
+
 export default function OcrTool() {
   const [state, setState] = useState(IDLE)
   const [options, setOptions] = useState({
     language: LANGUAGES[0].id,
     layout: LAYOUTS[0].id,
-    enhance: false,
+    contrast: 100, // percent; 100 leaves the picture alone
     allowLatin: false,
   })
   const [showLow, setShowLow] = useState(false)
@@ -205,6 +224,10 @@ export default function OcrTool() {
     clear()
     previewUrl.current = URL.createObjectURL(file)
     setState({ ...IDLE, image: file, previewUrl: previewUrl.current })
+    const id = run.current
+    brightnessOf(file)
+      .then((brightness) => run.current === id && setState((s) => ({ ...s, brightness })))
+      .catch(() => {}) // the preview just pivots on mid-gray if the picture can't be measured
   }
 
   // Listen on the whole page so Ctrl+V works without clicking into the drop box
@@ -254,7 +277,7 @@ export default function OcrTool() {
 
   const findRegions = () =>
     guarded({ regions: null, status: 'finding text regions' }, async () => {
-      const { regions, page } = await findTextRegions(state.image, sensitivity)
+      const { regions, page } = await findTextRegions(state.image, sensitivity, options.contrast)
       nextRegionId.current = regions.length + 1
       const found = regions.map((r, i) => ({ ...r, id: i + 1, included: false }))
       return () => ({ regions: found, page, status: '' })
@@ -308,7 +331,7 @@ export default function OcrTool() {
       if (!s.regions) return s
       if (!usesRegions(next)) return { ...s, regions: null, status: '' }
       // Read text depends on these settings; boxes stay.
-      if ('language' in patch || 'enhance' in patch || 'allowLatin' in patch) {
+      if ('language' in patch || 'contrast' in patch || 'allowLatin' in patch) {
         return { ...s, regions: s.regions.map((r) => ({ ...r, text: undefined, entries: undefined, confidence: undefined })), status: '' }
       }
       return s
@@ -357,7 +380,13 @@ export default function OcrTool() {
       {state.previewUrl && (
         <>
           <div className="previewBox">
-            <img className="preview" src={state.previewUrl} alt="Selected for text extraction" />
+            <img
+              className="preview"
+              src={state.previewUrl}
+              alt="Selected for text extraction"
+              style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
+            />
+            <ContrastFilter factor={options.contrast / 100} brightness={state.brightness} />
             {regionMode && state.regions && (
               <RegionOverlay
                 regions={state.regions}
@@ -412,14 +441,30 @@ export default function OcrTool() {
                 </select>
               </label>
             )}
-            <label>
+            <label className="contrast">
+              Contrast{' '}
               <input
-                type="checkbox"
-                checked={options.enhance}
-                onChange={(e) => changeOptions({ enhance: e.target.checked })}
+                type="range"
+                min={100}
+                max={300}
+                step={10}
+                value={options.contrast}
+                onChange={(e) => changeOptions({ contrast: Number(e.target.value) })}
+                aria-label="Contrast"
               />{' '}
-              Enhance image (upscale, sharpen contrast)
+              {options.contrast}%
+              {options.contrast !== 100 && (
+                <>
+                  {' '}
+                  <button type="button" onClick={() => changeOptions({ contrast: 100 })}>
+                    Reset
+                  </button>
+                </>
+              )}
             </label>
+            <span className="hint">
+              Raise it for faded or grey pages (about 200–250% works best); normal pages don't need it. Use Find again after changing it.
+            </span>
             <label>
               <input
                 type="checkbox"

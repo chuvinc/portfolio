@@ -2,7 +2,7 @@ import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
 import { japaneseWhitelist } from './charset'
 import { cleanEntries, entriesFromData, entriesToText } from './postprocess'
-import { enhanceImage } from './preprocess'
+import { contrastImage } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
 export { classifyRegion }
@@ -90,6 +90,13 @@ const charsetFor = (lang, allowLatin) =>
 // artwork produce hundreds of characters from a small box).
 export function expectedGlyphs(region, direction) {
   const { w, h } = region.core ?? region
+  // The glyph size gives a capacity that doesn't depend on getting the line or column count right
+  // (a block whose columns were miscounted would otherwise look like it holds far too little).
+  const byArea = region.glyph ? Math.max(1, w / region.glyph) * Math.max(1, h / region.glyph) : 0
+  return Math.max(byArea, byLines(region, direction, w, h))
+}
+
+function byLines(region, direction, w, h) {
   const count = Math.max(1, region.direction === direction ? (region.columns?.length ?? region.lines ?? 1) : 1)
   if (direction === 'vertical') {
     const glyph = region.columns?.length ? region.columns.reduce((sum, c) => sum + c.w, 0) / region.columns.length : w / count
@@ -112,8 +119,10 @@ const finish = (r) => {
 }
 
 // Finds candidate text groups on a page. Returns { regions, page } in the image's own pixels.
-export async function findTextRegions(image, sensitivity) {
-  const { regions, width, height } = await detectRegions(image, sensitivity)
+// Detection sees the same contrast-adjusted picture the reader does: on a faded, noisy page the
+// unadjusted picture can yield only noise specks and miss the real text.
+export async function findTextRegions(image, sensitivity, contrast = 100) {
+  const { regions, width, height } = await detectRegions(await contrastImage(image, contrast / 100), sensitivity)
   return { regions, page: { width, height } }
 }
 
@@ -121,7 +130,7 @@ export async function findTextRegions(image, sensitivity) {
 // chooseDirection). Resolves to [{ id, text, entries, confidence, language }],
 // where `entries` are the characters with their confidence (see postprocess.js).
 // Regions need { id, x, y, w, h, direction, lines, psm }.
-export async function readRegions(image, regions, { language = 'eng', enhance = false, allowLatin = false } = {}, onProgress) {
+export async function readRegions(image, regions, { language = 'eng', contrast = 100, allowLatin = false } = {}, onProgress) {
   const pool = workerPool()
   const results = []
 
@@ -129,7 +138,7 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
     const worker = await pool.get(lang)
     await worker.setParameters({ tessedit_pageseg_mode: psm, ...charsetFor(lang, allowLatin) })
     let crop = await cropRegion(image, box, upscaleFor(unit))
-    if (enhance) crop = await enhanceImage(crop)
+    crop = await contrastImage(crop, contrast / 100)
     const { data } = await worker.recognize(crop, {}, { text: true, blocks: true })
     return { entries: entriesFromData(data), confidence: data.confidence }
   }
@@ -184,11 +193,8 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
 // Extracts text from a whole image Blob/File in one pass, entirely in the browser.
 // Resolves to { text, entries, detected }, where `detected` describes what was used (or null).
 // Nothing is uploaded, and cacheMethod 'none' keeps tesseract from writing to IndexedDB.
-export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT, enhance = false, allowLatin = false } = {}, onProgress) {
-  if (enhance) {
-    onProgress?.({ status: 'enhancing image', progress: 0 })
-    image = await enhanceImage(image)
-  }
+export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT, contrast = 100, allowLatin = false } = {}, onProgress) {
+  image = await contrastImage(image, contrast / 100)
 
   let geometry = null
   if (layout === AUTO_LAYOUT) {

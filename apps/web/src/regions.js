@@ -7,10 +7,13 @@ const MIN_SPECK = 3 // ignore ink blobs smaller than this many pixels
 // Two ink blobs are one group if they are close in BOTH directions, measured in units of the
 // smaller blob. Glyphs stacked in a column sit tight against each other, while neighbouring
 // columns are further apart, so the allowance is generous along a column and tighter across.
-const ALONG = 1.4 // vertical gap allowed (down a column)
+const ALONG = 1.8 // vertical gap allowed (down a column); simple glyphs like こ leave big gaps
 const ACROSS = 0.6 // horizontal gap allowed (between neighbouring columns)
-const MAX_GROUPS = 600 // cap on fragments carried into the merge pass, so noisy pages stay fast
-const MAX_REGION_SHARE = 0.6 // a box covering more than this share of the page is the page, not text
+const MAX_GROUPS = 1200 // cap on fragments carried into the merge pass, so noisy pages stay fast
+const LONE_GLYPH = [0.5, 2] // a lone blob joins the merge pass if it is this close to the page's typical glyph size
+// A box covering more than this share of the image is the image itself, not text. Kept high on purpose:
+// a panel cropped tightly around a bubble is mostly text, and a lower limit broke such blocks apart.
+const MAX_REGION_SHARE = 0.9
 const SAME_SIZE = [0.6, 1.67] // groups merge only if their glyphs are this close in size
 const MIN_BLOBS = 3 // fixed floor used when judging a run of glyphs (see SENSITIVITY for groups)
 // How picky detection is about what counts as text. "strict" drops more junk but may miss
@@ -100,6 +103,14 @@ const PAD = 0.5 // grow each box by this many glyphs so edge strokes aren't clip
 const size = (b) => Math.max(b.maxX - b.minX, b.maxY - b.minY) + 1
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
 
+// How big a group's glyphs are. Not the median blob: a kana with dakuten is a body plus tiny dots,
+// so a group of them has a median blob size of a few pixels and looks like furigana (which got the
+// first character of a column thrown away). The 75th percentile follows the glyph bodies.
+export const glyphSize = (g) => {
+  const sizes = g.members.map(size).sort((a, b) => a - b)
+  return sizes[Math.min(sizes.length - 1, Math.floor(sizes.length * 0.75))]
+}
+
 // The most common blob size on the page. Text has hundreds of same-sized glyphs, so they
 // form the biggest peak in a size histogram; artwork is scattered and can't outvote them.
 function typicalGlyph(blobs) {
@@ -146,15 +157,15 @@ function sameTextArea(a, b, reach) {
 
 // Only groups with similar-sized glyphs are parts of the same text area.
 const comparable = (a, b) => {
-  const ratio = median(a.members.map(size)) / median(b.members.map(size))
+  const ratio = a.glyph / b.glyph
   return ratio >= SAME_SIZE[0] && ratio <= SAME_SIZE[1]
 }
 
 // Furigana (small readings printed beside a column or above a line) is a reading aid, not text
 // to read: small glyphs running alongside a bigger group, within its extent, are annotations.
 function isAnnotationOf(a, b) {
-  const small = median(a.members.map(size))
-  const big = median(b.members.map(size))
+  const small = a.glyph
+  const big = b.glyph
   if (small > big * ANNOTATION_SIZE) return false
   // Beside the bigger group, not inside its bounds (that would be a gap in a bigger drawing).
   const shared = overlap(a.minX, a.maxX, b.minX, b.maxX) * overlap(a.minY, a.maxY, b.minY, b.maxY)
@@ -167,8 +178,12 @@ function isAnnotationOf(a, b) {
   return (xGap <= reach && yShare >= 0.8) || (yGap <= reach && xShare >= 0.8)
 }
 
+// Area of the box that would hold both groups.
+const spanArea = (a, b) =>
+  (Math.max(a.maxX, b.maxX) - Math.min(a.minX, b.minX) + 1) * (Math.max(a.maxY, b.maxY) - Math.min(a.minY, b.minY) + 1)
+
 function mergeGroups(a, b) {
-  return {
+  const merged = {
     minX: Math.min(a.minX, b.minX),
     maxX: Math.max(a.maxX, b.maxX),
     minY: Math.min(a.minY, b.minY),
@@ -176,6 +191,8 @@ function mergeGroups(a, b) {
     area: a.area + b.area,
     members: [...a.members, ...b.members],
   }
+  merged.glyph = glyphSize(merged)
+  return merged
 }
 
 // A handful of glyphs strung along one axis is a single line or column, whatever
@@ -240,18 +257,28 @@ export function findRegions(image, sensitivity = 'normal') {
     else grouped.set(root, { ...b, members: [b] })
   })
 
+  const boxOf = (g) => (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
+  const boxArea = boxOf
+
   // Short columns (a bubble with one or two characters) are too small to judge alone, so keep
   // any fragment of two or more glyphs, join siblings that are one text area split by a gap,
   // and only then ask whether the joined group looks like text.
+  // A lone glyph (a kana drawn as one stroke, with a wide gap to its neighbours) is kept too, as
+  // long as it is about the size of the page's glyphs: otherwise horizontal lines with airy
+  // spacing shatter, and specks and giant shapes stay out.
   let groups = [...grouped.values()]
-    .filter((g) => g.members.length >= 2)
+    .map((g) => ({ ...g, glyph: glyphSize(g) }))
+    .filter((g) => g.members.length >= 2 || (g.glyph >= glyph * LONE_GLYPH[0] && g.glyph <= glyph * LONE_GLYPH[1]))
     .sort((a, b) => b.members.length - a.members.length)
     .slice(0, MAX_GROUPS)
   for (let merged = true; merged; ) {
     merged = false
     outer: for (let i = 0; i < groups.length; i++) {
       for (let j = i + 1; j < groups.length; j++) {
-        if (comparable(groups[i], groups[j]) && sameTextArea(groups[i], groups[j], glyph * MERGE_GAP)) {
+        // Never merge into something page-sized: that group would be thrown away as "the page",
+        // taking real text with it (a panel cropped tightly around a bubble is mostly text).
+        const tooBig = spanArea(groups[i], groups[j]) > MAX_REGION_SHARE * width * height
+        if (!tooBig && comparable(groups[i], groups[j]) && sameTextArea(groups[i], groups[j], glyph * MERGE_GAP)) {
           groups[i] = mergeGroups(groups[i], groups[j])
           groups.splice(j, 1)
           merged = true
@@ -263,7 +290,6 @@ export function findRegions(image, sensitivity = 'normal') {
 
   // Only groups that will really become boxes count, both as text and as the thing an
   // annotation sits beside: a page-sized junk group must not swallow the text inside it.
-  const boxArea = (g) => (g.maxX - g.minX + 1) * (g.maxY - g.minY + 1)
   groups = groups.filter((g) => {
     const density = g.area / boxArea(g)
     return (
@@ -289,9 +315,10 @@ export function findRegions(image, sensitivity = 'normal') {
 
     // Several vertical columns: remember where each one is so they can be read one at a time.
     let columns
-    if (direction === 'vertical' && lines > 1) {
+    if (direction === 'vertical') {
       const found = columnRanges(crop(image, g)).map((c) => ({ x: g.minX + c.x, w: c.w }))
       if (found.length > 1) columns = found
+      lines = Math.max(lines, found.length) // the profile can merge neighbouring columns into one
     }
 
     const x0 = Math.max(0, g.minX - pad)
@@ -299,7 +326,7 @@ export function findRegions(image, sensitivity = 'normal') {
     const x1 = Math.min(width - 1, g.maxX + pad)
     const y1 = Math.min(height - 1, g.maxY + pad)
     const core = { w: g.maxX - g.minX + 1, h: g.maxY - g.minY + 1 } // the text itself, without padding
-    regions.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, core, direction, lines, psm, columns })
+    regions.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, core, glyph: g.glyph, direction, lines, psm, columns })
   }
   return regions.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, MAX_REGIONS)
 }
@@ -334,6 +361,7 @@ export async function detectRegions(blob, sensitivity) {
     w: Math.round(r.w / scale),
     h: Math.round(r.h / scale),
     core: { w: Math.round(r.core.w / scale), h: Math.round(r.core.h / scale) },
+    glyph: Math.round(r.glyph / scale),
     columns: r.columns?.map((c) => ({ x: Math.round(c.x / scale), w: Math.round(c.w / scale) })),
   }))
   return { regions, ...size }
@@ -350,10 +378,15 @@ export const upscaleFor = ({ w, h, lines, direction }) => {
   return Math.min(MAX_UPSCALE, Math.max(1, TARGET_GLYPH / glyph))
 }
 
+// Extra margin around a crop. It follows the SHORT side: a tall narrow column padded by 4% of its
+// height would reach into the next column and read that as junk. The box already carries half a
+// glyph of margin of its own.
+export const cropPadding = (w, h) => Math.round(Math.min(w, h) * 0.05) + 2
+
 // Copies a region (plus a little padding) out of an image Blob as a PNG Blob, optionally enlarged.
 export async function cropRegion(blob, { x, y, w, h }, scale = 1) {
   const bitmap = await createImageBitmap(blob)
-  const pad = Math.round(Math.max(w, h) * 0.04) + 4
+  const pad = cropPadding(w, h)
   const sx = Math.max(0, x - pad)
   const sy = Math.max(0, y - pad)
   const sw = Math.min(bitmap.width - sx, w + pad * 2)
@@ -384,11 +417,14 @@ export async function classifyRegion(blob, { x, y, w, h }) {
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
   canvas.width = canvas.height = 0
   binarize(imageData)
-  const { direction, lines, psm } = analyzeInk(imageData)
+  const analysed = analyzeInk(imageData)
+  const { direction, psm } = analysed
+  let { lines } = analysed
   let columns
-  if (direction === 'vertical' && lines > 1) {
+  if (direction === 'vertical') {
     const found = columnRanges(imageData).map((c) => ({ x: x + Math.round(c.x / scale), w: Math.round(c.w / scale) }))
     if (found.length > 1) columns = found
+    lines = Math.max(lines, found.length)
   }
   return { direction, lines, psm, columns }
 }

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { binarize, scaleFor } from './preprocess'
+import { adjustContrast, binarize, meanBrightness } from './preprocess'
 
 // Builds RGBA pixel data from a list of gray values.
 const image = (grays) => ({
@@ -21,9 +21,30 @@ test('binarize inverts light text on a dark background', () => {
   expect(values(img)).toEqual([255, 255, 255, 255, 255, 0])
 })
 
-test('scaleFor upscales small images, shrinks huge ones, leaves the rest', () => {
-  expect(scaleFor(800, 400)).toBe(2)
-  expect(scaleFor(2000, 1000)).toBe(1)
-  expect(scaleFor(6400, 3000)).toBe(0.5)
-  expect(scaleFor(100, 100)).toBe(4)
+test('meanBrightness averages the pixels', () => {
+  expect(meanBrightness(image([0, 100, 200]))).toBeCloseTo(100)
+})
+
+test('adjustContrast pivots on the average brightness, darkening text and lightening paper', () => {
+  // A faded page: light-grey paper (230) with grey text (170). Mean is mostly paper.
+  const img = image([230, 230, 230, 230, 170])
+  adjustContrast(img, 2)
+  const [paper, , , , text] = values(img)
+  expect(paper).toBeGreaterThan(230) // lighter
+  expect(text).toBeLessThan(170) // darker
+})
+
+test('a fixed mid-gray pivot would wipe out a faded page, the mean pivot does not', () => {
+  const img = image([230, 230, 230, 230, 170])
+  adjustContrast(img, 3)
+  expect(values(img)[4]).toBeLessThan(values(img)[0]) // text still darker than paper
+})
+
+test('adjustContrast with factor 1 changes nothing, and values stay within 0-255', () => {
+  const img = image([10, 128, 240])
+  adjustContrast(img, 1)
+  expect(values(img)).toEqual([10, 128, 240])
+  adjustContrast(img, 10)
+  expect(Math.min(...values(img))).toBeGreaterThanOrEqual(0)
+  expect(Math.max(...values(img))).toBeLessThanOrEqual(255)
 })

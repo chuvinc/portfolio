@@ -16,6 +16,8 @@ vi.mock('./regions', () => ({
   detectRegions: vi.fn(),
 }))
 vi.mock('./layout', () => ({ inferLayout: vi.fn() }))
+// A contrast boost tags the crop so the test can see it was applied; 1 (no change) passes through.
+vi.mock('./preprocess', () => ({ contrastImage: vi.fn(async (image, factor) => (factor > 1 ? `${image}+contrast${factor}` : image)) }))
 vi.mock('tesseract.js', () => ({
   PSM: { AUTO: '3', SINGLE_BLOCK: '6', SINGLE_COLUMN: '4', SINGLE_LINE: '7', SPARSE_TEXT: '11', SINGLE_BLOCK_VERT_TEXT: '5' },
   createWorker: vi.fn(async (lang) => ({
@@ -32,7 +34,7 @@ vi.mock('tesseract.js', () => ({
   })),
 }))
 
-const { readRegions, chooseDirection, expectedGlyphs, plausibleConfidence } = await import('./ocr')
+const { readRegions, chooseDirection, expectedGlyphs, plausibleConfidence, findTextRegions } = await import('./ocr')
 
 // What the real models do (measured on rendered text): on vertical text the horizontal model is
 // plainly unsure; on horizontal text the vertical model is confidently wrong.
@@ -157,4 +159,31 @@ test('hallucinated floods come back with low confidence', async () => {
   const tiny = { id: 3, x: 0, y: 0, w: 20, h: 40, core: { w: 20, h: 40 }, direction: 'vertical', lines: 1, psm: '5' }
   const result = await read(tiny)
   expect(result.confidence).toBeLessThan(40)
+})
+
+test('expectedGlyphs uses the glyph size, so a miscounted column count cannot hide a good read', () => {
+  // A 3-column block reported as 1 column (113 x 413 px of text, glyphs about 35 px): holds ~38.
+  const block = { direction: 'vertical', lines: 1, core: { w: 113, h: 413 }, glyph: 35 }
+  expect(expectedGlyphs(block, 'vertical')).toBeGreaterThan(35)
+  // 41 characters read from it is fine and keeps its confidence.
+  expect(plausibleConfidence(90, 41, expectedGlyphs(block, 'vertical'))).toBe(90)
+  // Without the glyph size, the same block would look like it holds about 4 characters.
+  expect(expectedGlyphs({ ...block, glyph: undefined }, 'vertical')).toBeLessThan(5)
+})
+
+test('the contrast setting is applied to each crop before it is read, and 100% leaves it alone', async () => {
+  const plain = await read(horizontalLine)
+  expect(plain.text).not.toContain('contrast')
+
+  const boosted = await readRegions(new Blob(['x']), [horizontalLine], { language: 'jpn', contrast: 200 })
+  expect(boosted[0].text).toContain('+contrast2')
+})
+
+test('detection sees the contrast-adjusted picture too', async () => {
+  const { detectRegions } = await import('./regions')
+  detectRegions.mockResolvedValue({ regions: [], width: 10, height: 10 })
+  await findTextRegions('page', 'normal', 200)
+  expect(detectRegions).toHaveBeenLastCalledWith('page+contrast2', 'normal')
+  await findTextRegions('page', 'normal')
+  expect(detectRegions).toHaveBeenLastCalledWith('page', 'normal')
 })

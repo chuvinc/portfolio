@@ -62,16 +62,16 @@ test('ignores non-image files', () => {
   expect(screen.queryByText('Extract text')).toBeNull()
 })
 
-test('passes the chosen layout and enhance options to OCR, with Japanese as the language', async () => {
+test('passes the chosen layout and contrast to OCR, with Japanese as the language', async () => {
   render(<OcrTool />)
   pick()
 
   fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: '7' } })
-  fireEvent.click(screen.getByLabelText(/Enhance image/))
+  fireEvent.change(screen.getByLabelText('Contrast'), { target: { value: '200' } })
   fireEvent.click(screen.getByText('Extract text'))
 
   await waitFor(() =>
-    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7', enhance: true, allowLatin: false }, expect.any(Function)),
+    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7', contrast: 200, allowLatin: false }, expect.any(Function)),
   )
 })
 
@@ -196,4 +196,21 @@ test('clicking a wrong character adds a corrected word to the glossary', async (
 
   expect(screen.getByLabelText('Glossary').value).toBe('Tex') // "T" plus two characters of context
   expect(localStorage.getItem('ocr-glossary')).toBe('Tex')
+})
+
+test('the contrast slider previews live and can be reset', async () => {
+  render(<OcrTool />)
+  pick()
+  const preview = await screen.findByAltText('Selected for text extraction')
+  expect(preview.style.filter).toBe('') // untouched at 100%
+
+  fireEvent.change(screen.getByLabelText('Contrast'), { target: { value: '220' } })
+  expect(preview.style.filter).toContain('contrast-preview') // the preview is filtered
+  expect(screen.getByText(/220%/)).toBeTruthy()
+  const slope = document.querySelector('feFuncR').getAttribute('slope')
+  expect(Number(slope)).toBeCloseTo(2.2)
+
+  fireEvent.click(screen.getByText('Reset'))
+  expect(preview.style.filter).toBe('')
+  expect(screen.queryByText('Reset')).toBeNull()
 })

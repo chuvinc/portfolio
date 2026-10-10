@@ -260,3 +260,13 @@ footer {
 .fixer input[type='number'] {
   width: 4em;
 }
+
+.contrast input[type='range'] {
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
+
+.options .hint {
+  font-size: 14px;
+  color: var(--text);
+}
