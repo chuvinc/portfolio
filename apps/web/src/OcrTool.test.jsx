@@ -71,7 +71,7 @@ test('passes the chosen layout and enhance options to OCR, with Japanese as the 
   fireEvent.click(screen.getByText('Extract text'))
 
   await waitFor(() =>
-    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7', enhance: true }, expect.any(Function)),
+    expect(recognize).toHaveBeenCalledWith(expect.any(File), { language: 'jpn', layout: '7', enhance: true, allowLatin: false }, expect.any(Function)),
   )
 })
 

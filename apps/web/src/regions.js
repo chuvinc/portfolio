@@ -298,7 +298,8 @@ export function findRegions(image, sensitivity = 'normal') {
     const y0 = Math.max(0, g.minY - pad)
     const x1 = Math.min(width - 1, g.maxX + pad)
     const y1 = Math.min(height - 1, g.maxY + pad)
-    regions.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, direction, lines, psm, columns })
+    const core = { w: g.maxX - g.minX + 1, h: g.maxY - g.minY + 1 } // the text itself, without padding
+    regions.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, core, direction, lines, psm, columns })
   }
   return regions.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, MAX_REGIONS)
 }
@@ -332,6 +333,7 @@ export async function detectRegions(blob, sensitivity) {
     y: Math.round(r.y / scale),
     w: Math.round(r.w / scale),
     h: Math.round(r.h / scale),
+    core: { w: Math.round(r.core.w / scale), h: Math.round(r.core.h / scale) },
     columns: r.columns?.map((c) => ({ x: Math.round(c.x / scale), w: Math.round(c.w / scale) })),
   }))
   return { regions, ...size }

@@ -1,5 +1,6 @@
 import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
+import { japaneseWhitelist } from './charset'
 import { cleanEntries, entriesFromData, entriesToText } from './postprocess'
 import { enhanceImage } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
@@ -8,8 +9,10 @@ export { classifyRegion }
 
 export const AUTO_LAYOUT = 'auto'
 export const REGIONS_LAYOUT = 'regions'
-export const MIN_CONFIDENCE = 40 // regions Tesseract is less sure of than this look like ghost text
-const GOOD_ENOUGH = 70 // a Japanese read at least this confident is accepted without trying the other direction
+// Regions the engine is less sure of than this look like ghost text. Text-free artwork (screentone,
+// hatching, linework) read at a median of 0 and almost never reached 60, while real text read ~90.
+export const MIN_CONFIDENCE = 50
+const OVERSHOOT = 1.6 // more characters than this many times a box's capacity can't be real text
 export const LAYOUTS = [
   { id: AUTO_LAYOUT, label: 'Automatic' },
   { id: REGIONS_LAYOUT, label: 'Pick text regions (mixed pages)' },
@@ -49,16 +52,56 @@ function workerPool(onProgress) {
   }
 }
 
-// Runs the attempts in order and stops at the first confident one. Otherwise keeps the
-// most confident result. Each attempt is { direction, language, run: () => { text, confidence } }.
-async function readBest(attempts) {
-  let best = null
-  for (const attempt of attempts) {
-    const result = { ...(await attempt.run()), direction: attempt.direction, language: attempt.language }
-    if (!best || result.confidence > best.confidence) best = result
-    if (result.confidence >= GOOD_ENOUGH) break
+// Which Japanese reading to trust, vertical or horizontal. Measured on rendered text: the
+// vertical model is confidently wrong on horizontal text (about 83% sure while ~8% right, often
+// the right characters in reverse order), while the horizontal model is plainly unsure (~0%) on
+// vertical text. So a vertical read only wins when it is clearly more confident than the
+// horizontal one. Close calls go to the shape of the text (tall or wide), when known.
+export const VERTICAL_MARGIN = 15
+export function chooseDirection(vertical, horizontal, shape) {
+  const gap = vertical.confidence - horizontal.confidence
+  if (gap > VERTICAL_MARGIN) return 'vertical'
+  if (gap < -VERTICAL_MARGIN) return 'horizontal'
+  return shape ?? 'horizontal'
+}
+
+// Layout mode for the horizontal reading. A single line or column uses the line mode (on a
+// vertical column it reports ~0% confidence, a clear "no"). Anything bigger uses the automatic
+// mode: in "single block" mode the horizontal model reads a vertical block as confident gibberish
+// (85% sure, measured), which would defeat chooseDirection, while the automatic mode reports it
+// as unsure (25%) and reads horizontal blocks just as accurately (99%).
+const horizontalPsm = (lines) => (lines <= 1 ? PSM.SINGLE_LINE : PSM.AUTO)
+
+// Reads Japanese both ways and keeps the more believable one. `vertical` and `horizontal` are
+// functions returning { entries, confidence }; `shape` is 'vertical', 'horizontal' or undefined.
+async function readJapanese({ vertical, horizontal }, shape) {
+  const h = { ...(await horizontal()), direction: 'horizontal', language: 'jpn' }
+  const v = { ...(await vertical()), direction: 'vertical', language: 'jpn_vert' }
+  return chooseDirection(v, h, shape) === 'vertical' ? v : h
+}
+
+// Restricts the Japanese models to Japanese characters (see charset.js); other languages are
+// left alone.
+const charsetFor = (lang, allowLatin) =>
+  lang === 'jpn' || lang === 'jpn_vert' ? { tessedit_char_whitelist: japaneseWhitelist({ allowLatin }) } : {}
+
+// About how many characters a box can hold, from the size of the text itself and its lines or
+// columns. Used to spot a read that returned far more than could be there (screentone and other
+// artwork produce hundreds of characters from a small box).
+export function expectedGlyphs(region, direction) {
+  const { w, h } = region.core ?? region
+  const count = Math.max(1, region.direction === direction ? (region.columns?.length ?? region.lines ?? 1) : 1)
+  if (direction === 'vertical') {
+    const glyph = region.columns?.length ? region.columns.reduce((sum, c) => sum + c.w, 0) / region.columns.length : w / count
+    return count * Math.max(1, h / glyph)
   }
-  return best
+  return count * Math.max(1, w / (h / count))
+}
+
+// Scales a confidence down when the read has more characters than the box could hold.
+export function plausibleConfidence(confidence, characters, expected) {
+  const limit = expected * OVERSHOOT
+  return characters > limit ? confidence * (limit / characters) : confidence
 }
 
 // Tidies a read result's characters (spaces between kana, stray bars in vertical text) and adds
@@ -74,17 +117,17 @@ export async function findTextRegions(image, sensitivity) {
   return { regions, page: { width, height } }
 }
 
-// Reads each region on its own. Japanese is assumed vertical first, and horizontal is tried
-// only if that read isn't confident. Resolves to [{ id, text, entries, confidence, language }],
+// Reads each region on its own. Japanese is read both ways and the believable one kept (see
+// chooseDirection). Resolves to [{ id, text, entries, confidence, language }],
 // where `entries` are the characters with their confidence (see postprocess.js).
 // Regions need { id, x, y, w, h, direction, lines, psm }.
-export async function readRegions(image, regions, { language = 'eng', enhance = false } = {}, onProgress) {
+export async function readRegions(image, regions, { language = 'eng', enhance = false, allowLatin = false } = {}, onProgress) {
   const pool = workerPool()
   const results = []
 
   const read = async (lang, psm, box, unit) => {
     const worker = await pool.get(lang)
-    await worker.setParameters({ tessedit_pageseg_mode: psm })
+    await worker.setParameters({ tessedit_pageseg_mode: psm, ...charsetFor(lang, allowLatin) })
     let crop = await cropRegion(image, box, upscaleFor(unit))
     if (enhance) crop = await enhanceImage(crop)
     const { data } = await worker.recognize(crop, {}, { text: true, blocks: true })
@@ -112,29 +155,25 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
       onProgress?.({ status: `reading region ${i + 1} of ${regions.length}`, progress: i / regions.length })
       let best
       if (language === 'jpn') {
-        const horizontalPsm = region.direction === 'horizontal' ? region.psm : region.lines <= 1 ? PSM.SINGLE_LINE : PSM.SINGLE_BLOCK
         const unit = (direction, lines) => ({ ...region, direction, lines })
         best = finish(
-          await readBest([
+          await readJapanese(
             {
-              direction: 'vertical',
-              language: 'jpn_vert',
-              run: () =>
+              vertical: () =>
                 region.columns?.length > 1
                   ? readColumns(region)
                   : read('jpn_vert', PSM.SINGLE_BLOCK_VERT_TEXT, region, unit('vertical', region.direction === 'vertical' ? region.lines : 1)),
+              horizontal: () => read('jpn', horizontalPsm(region.lines), region, unit('horizontal', region.direction === 'horizontal' ? region.lines : 1)),
             },
-            {
-              direction: 'horizontal',
-              language: 'jpn',
-              run: () => read('jpn', horizontalPsm, region, unit('horizontal', region.direction === 'horizontal' ? region.lines : 1)),
-            },
-          ]),
+            region.direction,
+          ),
         )
       } else {
         best = finish({ ...(await read(language, region.psm, region, region)), language })
       }
-      results.push({ id: region.id, text: best.text, entries: best.entries, confidence: best.confidence, language: best.language })
+      const characters = Array.from(best.text).filter((ch) => ch.trim()).length
+      const confidence = plausibleConfidence(best.confidence, characters, expectedGlyphs(region, best.direction ?? region.direction))
+      results.push({ id: region.id, text: best.text, entries: best.entries, confidence, language: best.language })
     }
   } finally {
     await pool.close()
@@ -145,7 +184,7 @@ export async function readRegions(image, regions, { language = 'eng', enhance = 
 // Extracts text from a whole image Blob/File in one pass, entirely in the browser.
 // Resolves to { text, entries, detected }, where `detected` describes what was used (or null).
 // Nothing is uploaded, and cacheMethod 'none' keeps tesseract from writing to IndexedDB.
-export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT, enhance = false } = {}, onProgress) {
+export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT, enhance = false, allowLatin = false } = {}, onProgress) {
   if (enhance) {
     onProgress?.({ status: 'enhancing image', progress: 0 })
     image = await enhanceImage(image)
@@ -160,7 +199,7 @@ export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT,
   const pool = workerPool(onProgress)
   const read = async (lang, psm) => {
     const worker = await pool.get(lang)
-    await worker.setParameters({ tessedit_pageseg_mode: psm })
+    await worker.setParameters({ tessedit_pageseg_mode: psm, ...charsetFor(lang, allowLatin) })
     const { data } = await worker.recognize(image, {}, { text: true, blocks: true })
     return { entries: entriesFromData(data), confidence: data.confidence }
   }
@@ -172,13 +211,17 @@ export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT,
       return { text, entries, detected: geometry && { direction: geometry.direction, lines: geometry.lines, psm, language } }
     }
 
-    // Japanese: assume vertical first, and fall back to horizontal if that read isn't confident.
-    const horizontalPsm = geometry ? (geometry.direction === 'horizontal' ? geometry.psm : PSM.AUTO) : layout
+    // Japanese: read both ways and keep the believable one (see chooseDirection).
+    const lines = geometry ? geometry.lines : layout === PSM.SINGLE_LINE ? 1 : 2
+    const readPsm = horizontalPsm(lines)
     const best = finish(
-      await readBest([
-        { direction: 'vertical', language: 'jpn_vert', run: () => read('jpn_vert', PSM.SINGLE_BLOCK_VERT_TEXT) },
-        { direction: 'horizontal', language: 'jpn', run: () => read('jpn', horizontalPsm) },
-      ]),
+      await readJapanese(
+        {
+          vertical: () => read('jpn_vert', PSM.SINGLE_BLOCK_VERT_TEXT),
+          horizontal: () => read('jpn', readPsm),
+        },
+        geometry?.direction,
+      ),
     )
     return {
       text: best.text,
@@ -186,7 +229,7 @@ export async function recognize(image, { language = 'eng', layout = AUTO_LAYOUT,
       detected: {
         direction: best.direction,
         lines: geometry?.lines ?? 1,
-        psm: best.direction === 'vertical' ? PSM.SINGLE_BLOCK_VERT_TEXT : horizontalPsm,
+        psm: best.direction === 'vertical' ? PSM.SINGLE_BLOCK_VERT_TEXT : readPsm,
         language: best.language,
       },
     }
