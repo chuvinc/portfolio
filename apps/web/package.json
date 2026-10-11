@@ -13,6 +13,7 @@
     "prebuild": "node scripts/copy-ocr-assets.mjs"
   },
   "dependencies": {
+    "@techstark/opencv-js": "^5.0.0-release.1",
     "@tesseract.js-data/jpn": "^1.0.0",
     "@tesseract.js-data/jpn_vert": "^1.0.0",
     "react": "^19.2.8",

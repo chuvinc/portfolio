@@ -14,6 +14,8 @@ import {
 import { entriesFromText } from './postprocess'
 import { brightnessOf } from './preprocess'
 import { orderRegions } from './regions'
+import { createRegionMask } from './imageCleanup/masks.js'
+import { inpaintImage } from './imageCleanup/inpaint.js'
 
 const IDLE = {
   image: null,
@@ -342,6 +344,208 @@ function BoxInspector({ region, page, imageUrl, brightness, pageContrast, busy, 
   )
 }
 
+// brush erase mode
+function CleanupMaskBrush({ maskCanvas, previewCanvas, brushSize = 60 }) {
+  const overlayRef = useRef(null)
+  const lastPoint = useRef(null)
+
+  const undoHistory = useRef([])
+
+  const cursorRef = useRef(null)
+
+  const moveCursor = (event) => {
+    const cursor = cursorRef.current
+    if (!cursor) return
+
+    const rect = event.currentTarget.getBoundingClientRect()
+
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
+
+    const diameter = brushSize * (rect.width / maskCanvas.width)
+
+    cursor.style.width = `${diameter}px`
+    cursor.style.height = `${diameter}px`
+    cursor.style.left = `${x}px`
+    cursor.style.top = `${y}px`
+    cursor.style.display = 'block'
+  }
+
+  const saveUndoState = () => {
+    const context = maskCanvas.getContext('2d')
+    if (!context) return
+
+    const snapshot = context.getImageData(
+      0,
+      0,
+      maskCanvas.width,
+      maskCanvas.height
+    )
+
+    undoHistory.current.push(snapshot)
+
+    if (undoHistory.current.length > 10) {
+      undoHistory.current.shift()
+    }
+  }
+
+  useEffect(() => {
+    const undoLastStroke = () => {
+      const snapshot = undoHistory.current.pop()
+      if (!snapshot) return
+
+      const context = maskCanvas.getContext('2d')
+      if (!context) return
+
+      context.putImageData(snapshot, 0, 0)
+
+      const previewContext = previewCanvas?.getContext('2d')
+      if (!previewContext) return
+
+      const previewPixels = new ImageData(
+        new Uint8ClampedArray(snapshot.data),
+        snapshot.width,
+        snapshot.height
+      )
+
+      for (let i = 0; i < previewPixels.data.length; i += 4) {
+        const selected = previewPixels.data[i] > 127
+
+        previewPixels.data[i] = 255
+        previewPixels.data[i + 1] = 0
+        previewPixels.data[i + 2] = 0
+        previewPixels.data[i + 3] = selected ? 140 : 0
+      }
+
+      previewContext.putImageData(previewPixels, 0, 0)
+    }
+
+    const handleUndo = (event) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === 'z' &&
+        !event.shiftKey
+      ) {
+        const target = event.target
+
+        if (
+          target instanceof HTMLElement &&
+          (target.isContentEditable ||
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        ) {
+          return
+        }
+
+        if (undoHistory.current.length === 0) return
+
+        event.preventDefault()
+        undoLastStroke()
+      }
+    }
+
+    window.addEventListener('keydown', handleUndo)
+
+    return () => {
+      window.removeEventListener('keydown', handleUndo)
+    }
+  }, [maskCanvas, previewCanvas])
+
+  const getPoint = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * maskCanvas.width,
+      y: ((event.clientY - rect.top) / rect.height) * maskCanvas.height,
+    }
+  }
+
+  const eraseTo = (point) => {
+    const context = maskCanvas.getContext('2d')
+    if (!context) return
+
+    context.save()
+    context.strokeStyle = '#000000'
+    context.fillStyle = '#000000'
+    context.lineWidth = brushSize
+    context.lineCap = 'round'
+    context.lineJoin = 'round'
+
+    context.beginPath()
+
+    if (lastPoint.current) {
+      context.moveTo(lastPoint.current.x, lastPoint.current.y)
+      context.lineTo(point.x, point.y)
+      context.stroke()
+    } else {
+      context.arc(point.x, point.y, brushSize / 2, 0, Math.PI * 2)
+      context.fill()
+    }
+
+    context.restore()
+    const previousPoint = lastPoint.current
+    lastPoint.current = point
+
+    const previewContext = previewCanvas?.getContext('2d')
+
+    if (previewContext) {
+      previewContext.save()
+      previewContext.globalCompositeOperation = 'destination-out'
+      previewContext.strokeStyle = '#000'
+      previewContext.fillStyle = '#000'
+      previewContext.lineWidth = brushSize
+      previewContext.lineCap = 'round'
+      previewContext.lineJoin = 'round'
+      previewContext.beginPath()
+
+      if (previousPoint) {
+        previewContext.moveTo(previousPoint.x, previousPoint.y)
+        previewContext.lineTo(point.x, point.y)
+        previewContext.stroke()
+      } else {
+        previewContext.arc(point.x, point.y, brushSize / 2, 0, Math.PI * 2)
+        previewContext.fill()
+      }
+
+      previewContext.restore()
+    }
+  }
+
+  return (
+    <div
+      ref={overlayRef}
+      className="cleanup-brush-overlay"
+      onPointerDown={(event) => {
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+
+        saveUndoState()
+
+        lastPoint.current = null
+        eraseTo(getPoint(event))
+      }}
+      onPointerMove={(event) => {
+        moveCursor(event)
+        if (!lastPoint.current) return
+        eraseTo(getPoint(event))
+      }}
+      onPointerUp={() => {
+        lastPoint.current = null
+      }}
+      onPointerCancel={() => {
+        lastPoint.current = null
+      }}
+      onPointerEnter={moveCursor}
+      onPointerLeave={() => {
+        if (cursorRef.current) {
+          cursorRef.current.style.display = 'none'
+        }
+      }}
+    >
+      <div ref={cursorRef} className="cleanup-brush-cursor" />
+    </div>
+  )
+}
+
 export default function OcrTool() {
   const [state, setState] = useState(IDLE)
   const [options, setOptions] = useState({
@@ -351,6 +555,15 @@ export default function OcrTool() {
     allowLatin: false,
   })
   const [showLow, setShowLow] = useState(false)
+  const [showCleanupMask, setShowCleanupMask] = useState(false)
+  const [hasCleanupMask, setHasCleanupMask] = useState(false)
+  const cleanupMaskCanvas = useRef(null)
+  const cleanupPreviewCanvas = useRef(null)
+  const [eraseMaskMode, setEraseMaskMode] = useState(false)
+  const [cleanedImageUrl, setCleanedImageUrl] = useState(null)
+  const [removingText, setRemovingText] = useState(false)
+  const [showCleanedImage, setShowCleanedImage] = useState(true)
+  
   const [expanded, setExpanded] = useState(false) // false: picture on the left, controls beside it
   const [editing, setEditing] = useState(false) // the text box for rewriting the result by hand is open
   const [draft, setDraft] = useState('')
@@ -361,6 +574,88 @@ export default function OcrTool() {
       return '' // storage blocked: the glossary just won't persist
     }
   })
+
+  // add mask work
+  const drawCleanupMaskPreview = (mask, preview) => {
+    const source = mask.getContext('2d')
+    const target = preview.getContext('2d')
+    if (!source || !target) return
+
+    preview.width = mask.width
+    preview.height = mask.height
+
+    const pixels = source.getImageData(0, 0, mask.width, mask.height)
+
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      const selected = pixels.data[i] > 127
+
+      pixels.data[i] = 255
+      pixels.data[i + 1] = 0
+      pixels.data[i + 2] = 0
+      pixels.data[i + 3] = selected ? 140 : 0
+    }
+
+    target.putImageData(pixels, 0, 0)
+  }
+
+  const exportCleanedImage = () => {
+    if (!cleanedImageUrl) return
+
+    const link = document.createElement('a')
+    link.href = cleanedImageUrl
+    link.download = 'manga-cleaned.png'
+
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const removeText = async () => {
+    const mask = cleanupMaskCanvas.current
+    if (!mask || !state.previewUrl || removingText) return
+
+    setRemovingText(true)
+
+    try {
+      const image = new Image()
+      image.src = state.previewUrl
+      await image.decode()
+
+      const resultCanvas = await inpaintImage(image, mask)
+      setCleanedImageUrl(resultCanvas.toDataURL('image/png'))
+      setShowCleanedImage(true)
+      setShowCleanupMask(false)
+      setEraseMaskMode(false)
+    } catch (error) {
+      console.error('Text removal failed:', error)
+      alert(`Text removal failed: ${error.message}`)
+    } finally {
+      setRemovingText(false)
+    }
+  }
+
+  const generateCleanupMask = () => {
+    if (!state.page || !state.regions) return
+
+    const mask = createRegionMask(
+      state.page.width,
+      state.page.height,
+      state.regions
+    )
+
+    cleanupMaskCanvas.current = mask
+    setHasCleanupMask(true)
+    setShowCleanupMask(true)
+  }
+  useEffect(() => {
+    const mask = cleanupMaskCanvas.current
+    const preview = cleanupPreviewCanvas.current
+
+    if (!hasCleanupMask || !mask || !preview) return
+
+    drawCleanupMaskPreview(mask, preview)
+  }, [hasCleanupMask, state.regions])
+
   const glossary = useMemo(() => parseGlossary(glossaryText), [glossaryText])
   const updateGlossary = (value) => {
     setGlossaryText(value)
@@ -381,6 +676,14 @@ export default function OcrTool() {
     run.current += 1 // ignore results from any in-flight run
     nextRegionId.current = 1
     setEditing(false)
+    setShowCleanupMask(false)
+    setHasCleanupMask(false)
+    cleanupPreviewCanvas.current = null
+    cleanupMaskCanvas.current = null
+    setEraseMaskMode(false)
+    setCleanedImageUrl(null)
+    setRemovingText(false)
+    setShowCleanedImage(true)
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
     previewUrl.current = null
     setState(IDLE)
@@ -632,7 +935,7 @@ export default function OcrTool() {
               <div className="previewBox">
                 <img
                   className="preview"
-                  src={state.previewUrl}
+                  src={showCleanedImage && cleanedImageUrl ? cleanedImageUrl : state.previewUrl}
                   alt="Selected for text extraction"
                   style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
                   onLoad={(e) => {
@@ -642,7 +945,21 @@ export default function OcrTool() {
                   onDoubleClick={() => setExpanded((e) => !e)}
                 />
                 <ContrastFilter id="contrast-preview" factor={options.contrast / 100} brightness={state.brightness} />
-                {state.page && (!busy || state.regions) && (
+                {hasCleanupMask && (
+                  <canvas
+                    ref={cleanupPreviewCanvas}
+                    className="cleanup-mask-preview"
+                    aria-hidden="true"
+                    style={{ visibility: showCleanupMask ? 'visible' : 'hidden' }}
+                  />
+                )}
+                {eraseMaskMode && cleanupMaskCanvas.current && (
+                  <CleanupMaskBrush
+                    maskCanvas={cleanupMaskCanvas.current}
+                    previewCanvas={cleanupPreviewCanvas.current}
+                  />
+                )}
+                {!eraseMaskMode && state.page && (!busy || state.regions) && (
                   <RegionOverlay
                     regions={state.regions ?? []}
                     page={state.page}
@@ -683,6 +1000,75 @@ export default function OcrTool() {
                     <button type="button" onClick={() => setAllRegions(false)} disabled={busy}>
                       All off
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (showCleanupMask) {
+                          setShowCleanupMask(false)
+                        } else if (hasCleanupMask) {
+                          setShowCleanupMask(true)
+                        } else {
+                          generateCleanupMask()
+                        }
+                      }}
+                      disabled={busy}
+                      aria-pressed={showCleanupMask}
+                    >
+                      {showCleanupMask ? 'Hide cleanup mask' : 'Preview cleanup mask'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        generateCleanupMask()
+
+                        requestAnimationFrame(() => {
+                          if (cleanupMaskCanvas.current && cleanupPreviewCanvas.current) {
+                            drawCleanupMaskPreview(
+                              cleanupMaskCanvas.current,
+                              cleanupPreviewCanvas.current
+                            )
+                          }
+                        })
+                      }}
+                      disabled={busy || !state.page || !state.regions}
+                    >
+                      Reset cleanup mask
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEraseMaskMode((current) => !current)
+                        setShowCleanupMask(true)
+                      }}
+                      disabled={busy || !hasCleanupMask}
+                      aria-pressed={eraseMaskMode}
+                    >
+                      {eraseMaskMode ? 'Exit erase mode' : 'Erase mask'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={removeText}
+                      disabled={busy || removingText || !hasCleanupMask}
+                    >
+                      {removingText ? 'Removing...' : 'Remove text'}
+                    </button>
+                    {cleanedImageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setShowCleanedImage((current) => !current)}
+                        aria-pressed={showCleanedImage}
+                      >
+                        {showCleanedImage ? 'Show original' : 'Show text removed'}
+                      </button>
+                    )}
+                    {cleanedImageUrl && (
+                      <button
+                        type="button"
+                        onClick={exportCleanedImage}
+                      >
+                        Export cleaned image
+                      </button>
+                    )}
                     <button type="button" onClick={findRegions} disabled={busy}>
                       Find again
                     </button>

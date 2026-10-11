@@ -468,3 +468,36 @@ footer {
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
+
+.cleanup-mask-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.cleanup-brush-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: auto;
+  cursor: none;
+  touch-action: none;
+  overflow: hidden;
+}
+
+.cleanup-brush-cursor {
+  position: absolute;
+  display: none;
+  transform: translate(-50%, -50%);
+  border: 2px solid white;
+  outline: 1px solid black;
+  border-radius: 50%;
+  box-sizing: border-box;
+  pointer-events: none;
+}
