@@ -8,8 +8,9 @@ and deploy it.
 
 - A React frontend with project listings and build information.
 - Japanese OCR powered by Tesseract.js and WebAssembly, with manual text boxes,
-  preprocessing alternatives for difficult backgrounds, and glossary corrections.
-  Image processing happens locally in the browser; images are not uploaded.
+  confidence-aware region selection, mask-based text removal, preprocessing
+  alternatives for difficult backgrounds, and glossary corrections. Image
+  processing happens locally in the browser; images are not uploaded.
 - A small Node.js/Fastify API for project data and build metadata.
 - Automated tests and GitHub Actions checks, plus GitHub Pages deployment with
   static snapshots of the API responses.

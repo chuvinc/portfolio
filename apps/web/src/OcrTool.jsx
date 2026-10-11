@@ -557,6 +557,7 @@ export default function OcrTool() {
   const [showLow, setShowLow] = useState(false)
   const [showCleanupMask, setShowCleanupMask] = useState(false)
   const [hasCleanupMask, setHasCleanupMask] = useState(false)
+  const [cleanupMaskRegionKey, setCleanupMaskRegionKey] = useState(null)
   const cleanupMaskCanvas = useRef(null)
   const cleanupPreviewCanvas = useRef(null)
   const [eraseMaskMode, setEraseMaskMode] = useState(false)
@@ -644,6 +645,7 @@ export default function OcrTool() {
     )
 
     cleanupMaskCanvas.current = mask
+    setCleanupMaskRegionKey(state.regions.filter((region) => region.included).map((region) => region.id).join(','))
     setHasCleanupMask(true)
     setShowCleanupMask(true)
   }
@@ -678,6 +680,7 @@ export default function OcrTool() {
     setEditing(false)
     setShowCleanupMask(false)
     setHasCleanupMask(false)
+    setCleanupMaskRegionKey(null)
     cleanupPreviewCanvas.current = null
     cleanupMaskCanvas.current = null
     setEraseMaskMode(false)
@@ -876,6 +879,8 @@ export default function OcrTool() {
   const regionMode = usesRegions(options)
   const activeRegion = state.regions?.find((r) => r.id === state.activeId)
   const selectedIds = state.selected.filter((id) => state.regions?.some((r) => r.id === id))
+  const includedRegionKey = state.regions?.filter((region) => region.included).map((region) => region.id).join(',') ?? ''
+  const cleanupMaskIsStale = hasCleanupMask && cleanupMaskRegionKey !== includedRegionKey
   const busy = state.status && state.status !== 'done'
   const pending = state.regions?.filter((r) => r.included && r.text === undefined).length ?? 0
   const regionsRead = state.regions?.some((r) => r.text !== undefined)
@@ -976,29 +981,19 @@ export default function OcrTool() {
             </div>
             <div className="sidebar">
               <div className="actions bar">
-                {!regionMode && (
-                  <button type="button" onClick={extract} disabled={busy}>
-                    Extract text
-                  </button>
-                )}
-                {regionMode && !state.regions && (
-                  <button type="button" onClick={findRegions} disabled={busy}>
-                    Find text regions
-                  </button>
-                )}
                 {regionMode && state.regions && (
                   <>
                     <button type="button" onClick={readPending} disabled={busy || pending === 0}>
-                      Read {pending} region{pending === 1 ? '' : 's'}
+                      Read ({pending})
                     </button>
                     <button type="button" onClick={readAll} disabled={busy}>
-                      Read all (hide unsure)
+                      Read All
                     </button>
                     <button type="button" onClick={() => setAllRegions(true)} disabled={busy}>
-                      All on
+                      All On
                     </button>
                     <button type="button" onClick={() => setAllRegions(false)} disabled={busy}>
-                      All off
+                      All Off
                     </button>
                     <button
                       type="button"
@@ -1014,25 +1009,7 @@ export default function OcrTool() {
                       disabled={busy}
                       aria-pressed={showCleanupMask}
                     >
-                      {showCleanupMask ? 'Hide cleanup mask' : 'Preview cleanup mask'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        generateCleanupMask()
-
-                        requestAnimationFrame(() => {
-                          if (cleanupMaskCanvas.current && cleanupPreviewCanvas.current) {
-                            drawCleanupMaskPreview(
-                              cleanupMaskCanvas.current,
-                              cleanupPreviewCanvas.current
-                            )
-                          }
-                        })
-                      }}
-                      disabled={busy || !state.page || !state.regions}
-                    >
-                      Reset cleanup mask
+                      {showCleanupMask ? 'Hide Mask' : 'Show Mask'}
                     </button>
                     <button
                       type="button"
@@ -1043,40 +1020,70 @@ export default function OcrTool() {
                       disabled={busy || !hasCleanupMask}
                       aria-pressed={eraseMaskMode}
                     >
-                      {eraseMaskMode ? 'Exit erase mode' : 'Erase mask'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={removeText}
-                      disabled={busy || removingText || !hasCleanupMask}
-                    >
-                      {removingText ? 'Removing...' : 'Remove text'}
-                    </button>
-                    {cleanedImageUrl && (
-                      <button
-                        type="button"
-                        onClick={() => setShowCleanedImage((current) => !current)}
-                        aria-pressed={showCleanedImage}
-                      >
-                        {showCleanedImage ? 'Show original' : 'Show text removed'}
-                      </button>
-                    )}
-                    {cleanedImageUrl && (
-                      <button
-                        type="button"
-                        onClick={exportCleanedImage}
-                      >
-                        Export cleaned image
-                      </button>
-                    )}
-                    <button type="button" onClick={findRegions} disabled={busy}>
-                      Find again
+                      {eraseMaskMode ? 'Exit Erase Mode' : 'Erase Mask'}
                     </button>
                   </>
                 )}
-                <button type="button" onClick={clear}>
-                  Clear
-                </button>
+                <details
+                  className="more-menu"
+                  onClick={(event) => {
+                    if (event.target instanceof Element && event.target.closest('button')) {
+                      event.currentTarget.open = false
+                    }
+                  }}
+                >
+                  <summary>More ▾</summary>
+                  <div className="more-actions">
+                    {!regionMode && (
+                      <button type="button" onClick={extract} disabled={busy}>
+                        Extract text
+                      </button>
+                    )}
+                    {regionMode && state.regions && (
+                      <>
+                        <button type="button" onClick={removeText} disabled={busy || removingText || !hasCleanupMask}>
+                          {removingText ? 'Removing...' : 'Remove Text'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            generateCleanupMask()
+                            requestAnimationFrame(() => {
+                              if (cleanupMaskCanvas.current && cleanupPreviewCanvas.current) {
+                                drawCleanupMaskPreview(cleanupMaskCanvas.current, cleanupPreviewCanvas.current)
+                              }
+                            })
+                          }}
+                          disabled={busy || !state.page || !state.regions}
+                        >
+                          Reset Mask
+                        </button>
+                      </>
+                    )}
+                    {regionMode && (
+                      <button type="button" onClick={findRegions} disabled={busy}>
+                        Detect Again
+                      </button>
+                    )}
+                    {cleanedImageUrl && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setShowCleanedImage((current) => !current)}
+                          aria-pressed={showCleanedImage}
+                        >
+                          {showCleanedImage ? 'Show Original' : 'Show Cleaned'}
+                        </button>
+                        <button type="button" onClick={exportCleanedImage}>
+                          Download
+                        </button>
+                      </>
+                    )}
+                    <button type="button" onClick={clear}>
+                      Clear Image
+                    </button>
+                  </div>
+                </details>
               </div>
               {busy && (
                 <progress value={state.progress} max="1" aria-label={state.status}>
@@ -1086,10 +1093,17 @@ export default function OcrTool() {
               {state.error && <p className="status">Couldn't read that image: {state.error.message}</p>}
               {regionMode && state.regions && (
                 <p className="status">
-                  Found {state.regions.length} candidate boxes, all switched off (red). Click the ones
-                  that really contain text to turn them green. Drag anywhere to draw your own box, even
-                  over an existing one. Ctrl-click (Cmd on a Mac) picks boxes for a bulk action.
-                  Then read the green regions.
+                  {state.regions.length} text regions detected. Click a box to include or exclude it
+                  for reading and cleanup (red = off, green = included, orange = unsure). Drag on the
+                  image to draw a box. Ctrl-click selects boxes for bulk actions.
+                  Use "Read (x)" to read included/green boxes.
+                </p>
+              )}
+              {regionMode && hasCleanupMask && (cleanupMaskIsStale || !includedRegionKey) && (
+                <p className="status">
+                  {cleanupMaskIsStale
+                    ? 'The box selection changed after this mask was made. Choose More > Reset Mask to update it.'
+                    : 'This mask is empty because no boxes are on. Turn on boxes to include them in the mask.'}
                 </p>
               )}
               {regionMode && activeRegion && (

@@ -14,7 +14,14 @@ test('GET /api/projects returns a non-empty list', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/projects' })
   assert.equal(res.statusCode, 200)
   assert.ok(res.json().length > 0)
-  assert.equal(res.json().find((project) => project.id === 'portfolio').url, 'https://github.com/chuvinc/portfolio')
+  const projects = res.json()
+  const portfolio = projects.find((project) => project.id === 'portfolio')
+  const ocr = projects.find((project) => project.id === 'ocr')
+  assert.equal(portfolio.url, 'https://github.com/chuvinc/portfolio')
+  assert.ok(portfolio.tags.includes('vite'))
+  assert.ok(portfolio.tags.includes('node.js'))
+  assert.ok(ocr.tags.includes('opencv.js'))
+  assert.ok(ocr.tags.includes('canvas-api'))
 })
 
 test('buildInfo reads from env and has defaults', () => {

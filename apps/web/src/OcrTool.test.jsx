@@ -42,6 +42,12 @@ const pick = () => {
   fireEvent.change(document.querySelector('input[type=file]'), { target: { files: [file] } })
 }
 
+const clickMore = (name) => {
+  const menu = document.querySelector('.more-menu')
+  if (!menu.open) fireEvent.click(menu.querySelector('summary'))
+  fireEvent.click(screen.getByRole('button', { name }))
+}
+
 test('extracts text from a chosen image and clears everything', async () => {
   render(<OcrTool />)
   pick()
@@ -49,7 +55,7 @@ test('extracts text from a chosen image and clears everything', async () => {
   fireEvent.click(await screen.findByText('Extract text'))
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('hello world'))
 
-  fireEvent.click(screen.getByText('Clear'))
+  clickMore('Clear Image')
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake')
   expect(screen.queryByLabelText('Extracted text')).toBeNull()
   expect(screen.queryByAltText('Selected for text extraction')).toBeNull()
@@ -108,7 +114,7 @@ test('manual boxes can be drawn and read before auto-detection', async () => {
   fireEvent.pointerMove(el, { clientX: 300, clientY: 150 })
   fireEvent.pointerUp(el, { clientX: 300, clientY: 150 })
 
-  fireEvent.click(await screen.findByText('Read 1 region'))
+  fireEvent.click(await screen.findByText(/^Read \(/))
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   expect(findTextRegions.mock.calls.length).toBe(detections)
   expect(readRegions.mock.calls.at(-1)[1]).toEqual([
@@ -135,22 +141,75 @@ test('box details start collapsed and bulk deletion works without expanding them
 async function findRegionsMode() {
   render(<OcrTool />)
   pick()
+  const image = await screen.findByAltText('Selected for text extraction')
+  Object.defineProperties(image, {
+    naturalWidth: { value: 1000 },
+    naturalHeight: { value: 800 },
+  })
+  fireEvent.load(image)
   fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
-  fireEvent.click(screen.getByText('Find text regions'))
-  await screen.findByText(/all switched off/)
+  clickMore('Detect Again')
+  await screen.findByText(/text regions detected/)
   return overlay()
 }
+
+test('region toolbar keeps six primary actions and puts secondary actions in More', async () => {
+  await findRegionsMode()
+  const bar = document.querySelector('.actions.bar')
+  const primary = [...bar.querySelectorAll(':scope > button')].map((button) => button.textContent)
+  expect(primary).toEqual(['Read (0)', 'Read All', 'All On', 'All Off', 'Show Mask', 'Erase Mask'])
+
+  fireEvent.click(screen.getByText('More ▾'))
+  const menu = document.querySelector('.more-menu')
+  expect(menu.open).toBe(true)
+  expect([...menu.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+    'Remove Text',
+    'Reset Mask',
+    'Detect Again',
+    'Clear Image',
+  ])
+})
+
+test('mask preview explains empty or outdated masks and Reset Mask rebuilds it', async () => {
+  const el = await findRegionsMode()
+  const fillRect = vi.fn()
+  const context = {
+    fillRect,
+    getImageData: vi.fn((x, y, width, height) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      width,
+      height,
+    })),
+    putImageData: vi.fn(),
+  }
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+
+  try {
+    fireEvent.click(screen.getByText('Show Mask'))
+    expect(screen.getByText(/mask is empty because no boxes are on/i)).toBeTruthy()
+    expect(document.querySelector('.cleanup-mask-preview').style.visibility).toBe('visible')
+
+    clickAt(el, 150, 120)
+    expect(screen.getByText(/selection changed after this mask was made/i)).toBeTruthy()
+
+    clickMore('Reset Mask')
+    expect(screen.queryByText(/selection changed after this mask was made/i)).toBeNull()
+    expect(fillRect).toHaveBeenCalledWith(100, 100, 200, 50)
+  } finally {
+    getContext.mockRestore()
+  }
+})
 
 test('region mode: boxes start off, clicking turns them on, only those are read', async () => {
   const el = await findRegionsMode()
   const boxes = () => [...document.querySelectorAll('.region')]
   expect(boxes()).toHaveLength(2)
   expect(boxes().every((b) => b.classList.contains('off'))).toBe(true)
-  expect(screen.getByText('Read 0 regions')).toBeTruthy()
+  expect(screen.getByText(/^Read \(/).disabled).toBe(true)
 
   clickAt(el, 150, 120) // the horizontal box
   expect(boxes().filter((b) => b.classList.contains('on'))).toHaveLength(1)
-  fireEvent.click(screen.getByText('Read 1 region'))
+  fireEvent.click(screen.getByText(/^Read \(/))
 
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   expect(readRegions.mock.calls.at(-1)[1]).toHaveLength(1)
@@ -158,8 +217,8 @@ test('region mode: boxes start off, clicking turns them on, only those are read'
 
 test('region mode: low-confidence regions are hidden until asked for', async () => {
   await findRegionsMode()
-  fireEvent.click(screen.getByText('All on'))
-  fireEvent.click(screen.getByText('Read 2 regions'))
+  fireEvent.click(screen.getByText('All On'))
+  fireEvent.click(screen.getByText(/^Read \(/))
 
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   fireEvent.click(screen.getByLabelText(/Include regions Tesseract was unsure about/))
@@ -179,7 +238,7 @@ test('region mode: dragging over an existing box draws a new one instead of togg
 
 test('region mode: "Read all" switches every box on and hides the unsure ones', async () => {
   await findRegionsMode()
-  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  fireEvent.click(screen.getByText('Read All'))
 
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   const kinds = [...document.querySelectorAll('.region')].map((b) => (b.classList.contains('low') ? 'low' : 'on'))
@@ -198,9 +257,9 @@ test('the glossary corrects the output live and is remembered in this browser', 
   const first = render(<OcrTool />)
   pick()
   fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
-  fireEvent.click(screen.getByText('Find text regions'))
-  await screen.findByText(/all switched off/)
-  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  clickMore('Detect Again')
+  await screen.findByText(/text regions detected/)
+  fireEvent.click(screen.getByText('Read All'))
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
 
   // A rule applies to the text already read, with no new OCR run.
@@ -224,9 +283,9 @@ test('clicking a wrong character adds a corrected word to the glossary', async (
   render(<OcrTool />)
   pick()
   fireEvent.change(await screen.findByLabelText(/Text layout/), { target: { value: 'regions' } })
-  fireEvent.click(screen.getByText('Find text regions'))
-  await screen.findByText(/all switched off/)
-  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  clickMore('Detect Again')
+  await screen.findByText(/text regions detected/)
+  fireEvent.click(screen.getByText('Read All'))
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
 
   fireEvent.click(document.querySelector('[data-i="0"]')) // the "t"
@@ -265,7 +324,7 @@ test('clicking a box opens a close-up with its own contrast slider, used when th
 
   fireEvent.change(slider, { target: { value: '220' } })
   expect(screen.getByText(/Use the page setting/)).toBeTruthy()
-  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  fireEvent.click(screen.getByText('Read All'))
 
   await waitFor(() => expect(readRegions).toHaveBeenCalled())
   const sent = readRegions.mock.calls.at(-1)[1]
@@ -302,7 +361,7 @@ test('a selected box can be deleted', async () => {
 async function readFirstBox() {
   const el = await findRegionsMode()
   clickAt(el, 150, 120) // switch the first box on
-  fireEvent.click(screen.getByText('Read 1 region'))
+  fireEvent.click(screen.getByText(/^Read \(/))
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   return el
 }
@@ -310,7 +369,7 @@ async function readFirstBox() {
 test('thorough reading preserves output until a reading is chosen and changes only that box', async () => {
   localStorage.clear()
   await findRegionsMode()
-  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  fireEvent.click(screen.getByText('Read All'))
   await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
   fireEvent.click(screen.getByLabelText('Select box 1').closest('li'))
   const alternative = {
@@ -401,9 +460,9 @@ test('the picture starts on the left with the controls beside it, and can be exp
   expect(workspace.classList.contains('expanded')).toBe(false)
   expect(workspace.querySelector('.stage .previewBox')).toBeTruthy() // the picture
   // the controls are in the sidebar next to it
-  expect(workspace.querySelector('.sidebar').textContent).toContain('Read 0 regions')
-  expect(workspace.querySelector('.sidebar').textContent).toContain('All on')
-  expect(workspace.querySelector('.stage').textContent).not.toContain('All on')
+  expect(workspace.querySelector('.sidebar').textContent).toContain('Read (0)')
+  expect(workspace.querySelector('.sidebar').textContent).toContain('All On')
+  expect(workspace.querySelector('.stage').textContent).not.toContain('All On')
 
   fireEvent.click(screen.getByText('Expand image'))
   expect(workspace.classList.contains('expanded')).toBe(true)
@@ -461,9 +520,9 @@ test('picked boxes can be switched on or off together, and select all / none wor
   fireEvent.click(screen.getByText('Select all'))
   expect(screen.getByText('2 selected')).toBeTruthy()
   fireEvent.click(screen.getByText('Turn on'))
-  expect(screen.getByText('Read 2 regions')).toBeTruthy()
+  expect(screen.getByText(/^Read \(/).disabled).toBe(false)
   fireEvent.click(screen.getByText('Turn off'))
-  expect(screen.getByText('Read 0 regions')).toBeTruthy()
+  expect(screen.getByText(/^Read \(/).disabled).toBe(true)
   fireEvent.click(screen.getByText('Select none'))
   expect(screen.getByText('Delete selected').disabled).toBe(true)
 })
@@ -472,7 +531,7 @@ test('contrast can be set for several picked boxes at once', async () => {
   await findRegionsMode()
   fireEvent.click(screen.getByLabelText('Select box 1'))
   fireEvent.change(screen.getByLabelText('Contrast for selected boxes'), { target: { value: '230' } })
-  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  fireEvent.click(screen.getByText('Read All'))
 
   await waitFor(() => expect(readRegions).toHaveBeenCalled())
   const sent = readRegions.mock.calls.at(-1)[1]
@@ -493,14 +552,14 @@ test('the result sits under the picture, in its own cell next to the controls, a
   expect(output.textContent).toContain('Copy text')
   // the button bar is the sticky one
   expect(sidebar.firstElementChild.classList.contains('bar')).toBe(true)
-  expect(sidebar.firstElementChild.textContent).toContain('Read all (hide unsure)')
+  expect(sidebar.firstElementChild.textContent).toContain('Read All')
 })
 
 test('progress and errors show beside the buttons', async () => {
   const el = await findRegionsMode()
   expect(el).toBeTruthy()
   readRegions.mockImplementationOnce(() => new Promise(() => {})) // never finishes
-  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  fireEvent.click(screen.getByText('Read All'))
   const bar = await screen.findByRole('progressbar', {}, { timeout: 2000 }).catch(() => null)
   const sidebar = document.querySelector('.sidebar')
   expect(sidebar.querySelector('progress') ?? bar).toBeTruthy()

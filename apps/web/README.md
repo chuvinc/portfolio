@@ -33,9 +33,16 @@ Development and production builds copy OCR assets into `public/ocr` using
 
 ## OCR
 
-Upload or paste an image, then draw boxes manually or detect candidate regions.
-Read enabled boxes; Thorough read offers preprocessing alternatives for difficult
-text. Glossary corrections apply to extracted output. Engine confidence is not
-a guarantee of character accuracy.
+Upload or paste an image, then detect text regions or draw boxes manually. Click
+boxes to include or exclude them: red is off, green is included, and orange marks
+an unsure reading. `Read (x)` reads the included boxes that have not been read yet;
+`x` is their count. `Read All` includes and reads every box. Ctrl-click selects
+boxes for bulk actions.
+
+The `More` menu contains text removal, mask reset, detection again, original or
+cleaned image switching, cleaned-image download, and clearing the image. For
+whole-image OCR, use `Extract text` in `More`. Thorough read offers preprocessing
+alternatives for difficult text, and glossary corrections apply to extracted
+output. Engine confidence is not a guarantee of character accuracy.
 
 The React Compiler is not enabled. Tests use Vitest and React Testing Library.
