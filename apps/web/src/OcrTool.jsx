@@ -900,8 +900,8 @@ export default function OcrTool() {
   return (
     <div className="ocr">
       <p className="status">
-        Your image is read in this browser tab. It is never uploaded or saved, and nothing is
-        cached afterwards.
+        OCR runs in your browser. Your image stays in this tab while you work. Use Clear Image to
+        remove it.
       </p>
 
       <label

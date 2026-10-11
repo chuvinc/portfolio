@@ -8,9 +8,9 @@ export const projects = [
   },
   {
     id: 'ocr',
-    name: 'Private image-to-text (OCR)',
-    summary: 'Private, browser-based OCR with Tesseract.js, region selection, and OpenCV.js text removal. Images are never uploaded or stored.',
-    tags: ['react', 'tesseract.js', 'webassembly', 'opencv.js', 'canvas-api', 'privacy'],
+    name: 'Image text reader',
+    summary: 'Browser-based OCR with selectable text regions and OpenCV.js text removal.',
+    tags: ['react', 'tesseract.js', 'webassembly', 'opencv.js', 'canvas-api', 'browser-based'],
     url: '#ocr',
   },
 ]

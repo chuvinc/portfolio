@@ -1,8 +1,9 @@
 # Portfolio Web App
 
-React and Vite frontend for the portfolio and browser-only Japanese OCR tool.
-The API supplies project listings and build information. OCR images stay in the
-browser; generated worker, WebAssembly core, and Japanese models are self-hosted.
+React and Vite frontend for the portfolio and browser-based image text reader.
+The API supplies project listings and build information. OCR runs in the browser
+using the self-hosted worker, WebAssembly core, and language data. The selected
+image remains in the page while you work and can be removed with Clear Image.
 
 ## Development
 

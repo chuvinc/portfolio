@@ -20,6 +20,8 @@ test('GET /api/projects returns a non-empty list', async () => {
   assert.equal(portfolio.url, 'https://github.com/chuvinc/portfolio')
   assert.ok(portfolio.tags.includes('vite'))
   assert.ok(portfolio.tags.includes('node.js'))
+  assert.equal(ocr.name, 'Image text reader')
+  assert.match(ocr.summary, /Browser-based OCR with selectable text regions/)
   assert.ok(ocr.tags.includes('opencv.js'))
   assert.ok(ocr.tags.includes('canvas-api'))
 })

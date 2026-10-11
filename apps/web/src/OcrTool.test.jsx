@@ -68,6 +68,11 @@ test('ignores non-image files', () => {
   expect(screen.queryByText('Extract text')).toBeNull()
 })
 
+test('explains where image processing happens and how to remove the image', () => {
+  render(<OcrTool />)
+  expect(screen.getByText(/OCR runs in your browser.*stays in this tab while you work.*Clear Image to remove it/i)).toBeTruthy()
+})
+
 test('passes the chosen layout and contrast to OCR, with Japanese as the language', async () => {
   render(<OcrTool />)
   pick()
