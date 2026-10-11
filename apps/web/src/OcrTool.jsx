@@ -202,59 +202,62 @@ function BoxList({ regions, selected, activeId, showLow, pageContrast, onPick, o
         <button type="button" onClick={onSelectNone} disabled={selected.length === 0}>
           Select none
         </button>
+        <button type="button" className="danger" onClick={onDelete} disabled={selected.length === 0}>
+          Delete selected
+        </button>
       </div>
-      <ul>
-        {[...regions]
-          .sort((a, b) => a.id - b.id)
-          .map((r) => (
-            <li key={r.id} className={r.id === activeId ? 'active' : ''} onClick={() => onActivate(r.id)}>
-              <label onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={selected.includes(r.id)}
-                  onChange={() => onPick(r.id)}
-                  aria-label={`Select box ${r.id}`}
-                />{' '}
-              </label>
-              <span>
-                #{r.id} · {r.direction} · {word[boxKind(r, showLow)]}
-                {r.confidence !== undefined && ` · ${Math.round(r.confidence)}%`}
-              </span>
-            </li>
-          ))}
-      </ul>
-      {selected.length > 0 && (
-        <div className="bulk">
-          <strong>{selected.length} selected</strong>
-          <div className="actions">
-            <button type="button" onClick={() => onTurn(true)}>
-              Turn on
-            </button>
-            <button type="button" onClick={() => onTurn(false)}>
-              Turn off
-            </button>
-            <button type="button" className="danger" onClick={onDelete}>
-              Delete selected
-            </button>
+      <details>
+        <summary>Box details</summary>
+        <ul>
+          {[...regions]
+            .sort((a, b) => a.id - b.id)
+            .map((r) => (
+              <li key={r.id} className={r.id === activeId ? 'active' : ''} onClick={() => onActivate(r.id)}>
+                <label onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(r.id)}
+                    onChange={() => onPick(r.id)}
+                    aria-label={`Select box ${r.id}`}
+                  />{' '}
+                </label>
+                <span>
+                  #{r.id} · {r.direction} · {word[boxKind(r, showLow)]}
+                  {r.confidence !== undefined && ` · ${Math.round(r.confidence)}%`}
+                </span>
+              </li>
+            ))}
+        </ul>
+        {selected.length > 0 && (
+          <div className="bulk">
+            <strong>{selected.length} selected</strong>
+            <div className="actions">
+              <button type="button" onClick={() => onTurn(true)}>
+                Turn on
+              </button>
+              <button type="button" onClick={() => onTurn(false)}>
+                Turn off
+              </button>
+            </div>
+            <label>
+              Contrast for selected{' '}
+              <input
+                type="range"
+                min={100}
+                max={300}
+                step={10}
+                value={bulk}
+                onChange={(e) => {
+                  setBulk(Number(e.target.value))
+                  onContrast(Number(e.target.value))
+                }}
+                aria-label="Contrast for selected boxes"
+              />{' '}
+              {bulk}%
+            </label>
           </div>
-          <label>
-            Contrast for selected{' '}
-            <input
-              type="range"
-              min={100}
-              max={300}
-              step={10}
-              value={bulk}
-              onChange={(e) => {
-                setBulk(Number(e.target.value))
-                onContrast(Number(e.target.value))
-              }}
-              aria-label="Contrast for selected boxes"
-            />{' '}
-            {bulk}%
-          </label>
-        </div>
-      )}
+        )}
+      </details>
     </div>
   )
 }
@@ -346,6 +349,7 @@ export default function OcrTool() {
   // Drops the image, preview URL and extracted text from memory.
   const clear = () => {
     run.current += 1 // ignore results from any in-flight run
+    nextRegionId.current = 1
     setEditing(false)
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
     previewUrl.current = null
@@ -486,7 +490,8 @@ export default function OcrTool() {
       const info = await classifyRegion(state.image, box)
       if (run.current !== id) return
       const region = { ...box, ...info, id: nextRegionId.current++, included: true }
-      setState((s) => ({ ...s, activeId: region.id, regions: [...s.regions, region] }))
+      setOptions((current) => ({ ...current, layout: 'regions' }))
+      setState((s) => ({ ...s, activeId: region.id, regions: [...(s.regions ?? []), region] }))
     } catch {
       // A box we can't analyse is simply not added.
     }
@@ -571,12 +576,16 @@ export default function OcrTool() {
                   src={state.previewUrl}
                   alt="Selected for text extraction"
                   style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
+                  onLoad={(e) => {
+                    const { naturalWidth: width, naturalHeight: height } = e.currentTarget
+                    if (width && height) setState((s) => ({ ...s, page: { width, height } }))
+                  }}
                   onDoubleClick={() => setExpanded((e) => !e)}
                 />
                 <ContrastFilter id="contrast-preview" factor={options.contrast / 100} brightness={state.brightness} />
-                {regionMode && state.regions && (
+                {state.page && (!busy || state.regions) && (
                   <RegionOverlay
-                    regions={state.regions}
+                    regions={state.regions ?? []}
                     page={state.page}
                     showLow={showLow}
                     activeId={state.activeId}

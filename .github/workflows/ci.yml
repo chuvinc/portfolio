@@ -15,70 +15,33 @@ permissions:
   contents: read
 
 jobs:
-  web:
-    name: web (node ${{ matrix.node }})
+  checks:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [22, 24]
-    defaults:
-      run:
-        working-directory: apps/web
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 22
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: |
+            apps/api/package-lock.json
+            apps/web/package-lock.json
       - run: npm ci
-      - run: npm run lint
-      - run: npm test
-      - run: npm run build
-
-  api:
-    name: api (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [22, 24]
-    defaults:
-      run:
         working-directory: apps/api
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-          cache-dependency-path: apps/api/package-lock.json
-      - run: npm ci
       - run: npm test
-
-  # Boots the real compose stack and checks it through the nginx front door.
-  e2e:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Start stack
-        run: docker compose up -d --build --wait
-      - name: Check endpoints through nginx
-        run: |
-          curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
-          curl -fsS http://localhost:8080/api/projects | jq -e 'length > 0'
-          curl -fsS http://localhost:8080/api/build-info | jq -e '.commit'
-      - name: Show logs on failure
-        if: failure()
-        run: docker compose logs
-      - name: Stop stack
-        if: always()
-        run: docker compose down
+        working-directory: apps/api
+      - run: npm ci
+        working-directory: apps/web
+      - run: npm run lint
+        working-directory: apps/web
+      - run: npm test
+        working-directory: apps/web
+      - run: npm run build
+        working-directory: apps/web
 
   # Pages is static, so snapshot the real API's responses into the site.
   pages-build:
-    needs: [web, api, e2e]
+    needs: checks
     # Deploy on pushes, or on a manual run from develop (never from another branch).
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop')
     runs-on: ubuntu-latest

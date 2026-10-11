@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import OcrTool from './OcrTool'
-import { readRegions, recognize } from './ocr'
+import { findTextRegions, readRegions, recognize } from './ocr'
 
 vi.mock('./ocr', () => ({
   LAYOUTS: [
@@ -92,6 +92,45 @@ function overlay() {
   return el
 }
 const clickAt = (el, x, y) => fireEvent.click(el, { clientX: x, clientY: y })
+
+test('manual boxes can be drawn and read before auto-detection', async () => {
+  const detections = findTextRegions.mock.calls.length
+  render(<OcrTool />)
+  pick()
+  const image = await screen.findByAltText('Selected for text extraction')
+  Object.defineProperties(image, {
+    naturalWidth: { value: 1000 },
+    naturalHeight: { value: 800 },
+  })
+  fireEvent.load(image)
+  const el = overlay()
+  fireEvent.pointerDown(el, { clientX: 100, clientY: 100 })
+  fireEvent.pointerMove(el, { clientX: 300, clientY: 150 })
+  fireEvent.pointerUp(el, { clientX: 300, clientY: 150 })
+
+  fireEvent.click(await screen.findByText('Read 1 region'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
+  expect(findTextRegions.mock.calls.length).toBe(detections)
+  expect(readRegions.mock.calls.at(-1)[1]).toEqual([
+    expect.objectContaining({ id: 1, x: 100, y: 100, w: 200, h: 50, included: true }),
+  ])
+})
+
+test('box details start collapsed and bulk deletion works without expanding them', async () => {
+  await findRegionsMode()
+  const details = screen.getByText('Box details').closest('details')
+  const remove = screen.getByRole('button', { name: 'Delete selected' })
+  expect(details.open).toBe(false)
+  expect(remove.disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Select all' }))
+  expect(remove.disabled).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Select none' }))
+  expect(remove.disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Select all' }))
+  fireEvent.click(remove)
+  expect(document.querySelectorAll('.region')).toHaveLength(0)
+  expect(details.open).toBe(false)
+})
 
 async function findRegionsMode() {
   render(<OcrTool />)
@@ -335,7 +374,7 @@ test('double-clicking empty space on the picture expands it, but double-clicking
 
 test('several boxes can be picked from the list and deleted together', async () => {
   await findRegionsMode()
-  expect(screen.queryByText('Delete selected')).toBeNull() // nothing picked yet
+  expect(screen.getByText('Delete selected').disabled).toBe(true)
 
   fireEvent.click(screen.getByLabelText('Select box 1'))
   fireEvent.click(screen.getByLabelText('Select box 2'))
@@ -343,7 +382,8 @@ test('several boxes can be picked from the list and deleted together', async () 
 
   fireEvent.click(screen.getByText('Delete selected'))
   expect(document.querySelectorAll('.region')).toHaveLength(0)
-  expect(screen.queryByText(/selected/)).toBeNull()
+  expect(screen.getByText('Delete selected').disabled).toBe(true)
+  expect(screen.queryByText('2 selected')).toBeNull()
 })
 
 test('only the picked boxes are deleted', async () => {
@@ -373,7 +413,7 @@ test('picked boxes can be switched on or off together, and select all / none wor
   fireEvent.click(screen.getByText('Turn off'))
   expect(screen.getByText('Read 0 regions')).toBeTruthy()
   fireEvent.click(screen.getByText('Select none'))
-  expect(screen.queryByText('Delete selected')).toBeNull()
+  expect(screen.getByText('Delete selected').disabled).toBe(true)
 })
 
 test('contrast can be set for several picked boxes at once', async () => {
