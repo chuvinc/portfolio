@@ -141,6 +141,45 @@ export async function isolateInk(blob, mode) {
   return result
 }
 
+export function normalizeBackgroundPixels({ data, width, height }, mode, radius = 20) {
+  const stride = width + 1
+  const sums = new Float64Array(stride * (height + 1))
+  const gray = new Uint8Array(width * height)
+  for (let row = 0; row < height; row++) {
+    let rowSum = 0
+    for (let column = 0; column < width; column++) {
+      const index = row * width + column
+      gray[index] = Math.round(0.299 * data[index * 4] + 0.587 * data[index * 4 + 1] + 0.114 * data[index * 4 + 2])
+      rowSum += gray[index]
+      sums[(row + 1) * stride + column + 1] = sums[row * stride + column + 1] + rowSum
+    }
+  }
+  for (let row = 0; row < height; row++) {
+    const top = Math.max(0, row - radius)
+    const bottom = Math.min(height, row + radius + 1)
+    for (let column = 0; column < width; column++) {
+      const left = Math.max(0, column - radius)
+      const right = Math.min(width, column + radius + 1)
+      const sum = sums[bottom * stride + right] - sums[top * stride + right] - sums[bottom * stride + left] + sums[top * stride + left]
+      const background = sum / ((bottom - top) * (right - left))
+      const index = row * width + column
+      const difference = mode === 'dark' ? background - gray[index] : gray[index] - background
+      const value = difference >= 20 ? 0 : 255
+      data[index * 4] = data[index * 4 + 1] = data[index * 4 + 2] = value
+      data[index * 4 + 3] = 255
+    }
+  }
+}
+
+export async function normalizeBackground(blob, mode) {
+  const { canvas, ctx, imageData } = await pixelsOf(blob)
+  normalizeBackgroundPixels(imageData, mode)
+  ctx.putImageData(imageData, 0, 0)
+  const result = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+  canvas.width = canvas.height = 0
+  return result
+}
+
 // Returns the image stretched horizontally by `factorX` (1 = unchanged, which returns the same Blob).
 // Restores the proportions of squeezed or tall lettering: undoing a 0.6x squeeze took a read from 0% to 100%.
 export async function stretchImage(blob, factorX) {

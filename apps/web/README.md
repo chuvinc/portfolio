@@ -1,16 +1,41 @@
-# React + Vite
+# Portfolio Web App
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React and Vite frontend for the portfolio and browser-only Japanese OCR tool.
+The API supplies project listings and build information. OCR images stay in the
+browser; generated worker, WebAssembly core, and Japanese models are self-hosted.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From the repository root:
 
-## React Compiler
+```sh
+npm ci
+npm run install:all
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Vite prints the web URL and proxies `/api` to the Node API on port 3000.
+To run only the frontend, use `npm run dev --prefix apps/web`.
+On Windows PowerShell, use `npm.cmd` if execution policy blocks `npm`.
 
-## Expanding the ESLint configuration
+## Checks
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+From the repository root:
+
+```sh
+npm test
+npm run lint
+npm run build
+```
+
+Development and production builds copy OCR assets into `public/ocr` using
+`scripts/copy-ocr-assets.mjs`. Do not edit those generated assets.
+
+## OCR
+
+Upload or paste an image, then draw boxes manually or detect candidate regions.
+Read enabled boxes; Thorough read offers preprocessing alternatives for difficult
+text. Glossary corrections apply to extracted output. Engine confidence is not
+a guarantee of character accuracy.
+
+The React Compiler is not enabled. Tests use Vitest and React Testing Library.

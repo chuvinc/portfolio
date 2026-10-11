@@ -14,6 +14,7 @@ test('GET /api/projects returns a non-empty list', async () => {
   const res = await app.inject({ method: 'GET', url: '/api/projects' })
   assert.equal(res.statusCode, 200)
   assert.ok(res.json().length > 0)
+  assert.equal(res.json().find((project) => project.id === 'portfolio').url, 'https://github.com/chuvinc/portfolio')
 })
 
 test('buildInfo reads from env and has defaults', () => {

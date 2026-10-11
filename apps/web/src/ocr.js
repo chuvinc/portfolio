@@ -2,7 +2,7 @@ import { createWorker, PSM } from 'tesseract.js'
 import { inferLayout } from './layout'
 import { japaneseWhitelist } from './charset'
 import { cleanEntries, entriesFromData, entriesToText } from './postprocess'
-import { contrastImage, isolateInk, stretchImage } from './preprocess'
+import { contrastImage, isolateInk, normalizeBackground, stretchImage } from './preprocess'
 import { classifyRegion, cropRegion, detectRegions, upscaleFor } from './regions'
 
 export { classifyRegion }
@@ -148,13 +148,14 @@ export async function findTextRegions(image, sensitivity, contrast = 100) {
 // Resolves to [{ id, text, entries, confidence, language, ink, scale, stretch }] (the last three say which retry won, if any),
 // where `entries` are the characters with their confidence (see postprocess.js).
 // Regions need { id, x, y, w, h, direction, lines, psm }.
-export async function readRegions(image, regions, { language = 'eng', contrast = 100, allowLatin = false } = {}, onProgress) {
+export async function readRegions(image, regions, { language = 'eng', contrast = 100, allowLatin = false, thorough = false } = {}, onProgress) {
   const pool = workerPool()
   const results = []
   let regionContrast = contrast // the contrast of the region being read
   let ink = null // null = read as is; 'dark' / 'light' = isolate that ink first
   let scaleBoost = 1 // multiplies the usual scale, for the retries
   let aspect = 1 // horizontal stretch applied to the crop, for the retries
+  let localInk = null
 
   const read = async (lang, psm, box, unit) => {
     const worker = await pool.get(lang)
@@ -163,6 +164,7 @@ export async function readRegions(image, regions, { language = 'eng', contrast =
     crop = await stretchImage(crop, aspect)
     crop = await contrastImage(crop, regionContrast / 100)
     if (ink) crop = await isolateInk(crop, ink)
+    if (localInk) crop = await normalizeBackground(crop, localInk)
     const { data } = await worker.recognize(crop, {}, { text: true, blocks: true })
     return { entries: entriesFromData(data), confidence: data.confidence }
   }
@@ -208,7 +210,45 @@ export async function readRegions(image, regions, { language = 'eng', contrast =
       ink = null
       scaleBoost = 1
       aspect = 1
+      localInk = null
       const score = (r) => readScore(r.confidence, countCharacters(r.text), expectedGlyphs(region, r.direction ?? region.direction))
+      if (thorough) {
+        const alternatives = []
+        const variants = [
+          { method: 'Original', contrast: 100 },
+          { method: 'Adjusted contrast', contrast: Math.max(200, regionContrast) },
+          { method: 'Dark fill', contrast: 100, ink: 'dark' },
+          { method: 'Light fill', contrast: 100, ink: 'light' },
+          { method: 'Local dark fill', contrast: 100, localInk: 'dark' },
+          { method: 'Local light fill', contrast: 100, localInk: 'light' },
+        ]
+        for (const [index, variant] of variants.entries()) {
+          onProgress?.({ status: `reading region ${i + 1}: ${variant.method}`, progress: (i + index / variants.length) / regions.length })
+          regionContrast = variant.contrast
+          ink = variant.ink ?? null
+          localInk = variant.localInk ?? null
+          const candidate = await readOnce(region)
+          const ranked = {
+            ...candidate,
+            engineConfidence: candidate.confidence,
+            confidence: plausibleConfidence(candidate.confidence, countCharacters(candidate.text), expectedGlyphs(region, candidate.direction ?? region.direction)),
+            score: score(candidate),
+            methods: [variant.method],
+          }
+          const duplicate = alternatives.findIndex((alternative) => alternative.text === candidate.text)
+          if (duplicate < 0) alternatives.push(ranked)
+          else {
+            const existing = alternatives[duplicate]
+            alternatives[duplicate] = {
+              ...(ranked.score > existing.score ? ranked : existing),
+              methods: [...existing.methods, variant.method],
+            }
+          }
+        }
+        alternatives.sort((first, second) => second.score - first.score)
+        results.push({ ...alternatives[0], id: region.id, alternatives })
+        continue
+      }
       let best = await readOnce(region)
       if (score(best) < RETRY_BELOW) {
         // Cheapest and most often useful first: other scales, then other proportions, then the

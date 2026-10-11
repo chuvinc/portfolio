@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { adjustContrast, binarize, isolateInkPixels, meanBrightness } from './preprocess'
+import { adjustContrast, binarize, isolateInkPixels, meanBrightness, normalizeBackgroundPixels } from './preprocess'
 
 // Builds RGBA pixel data from a list of gray values.
 const image = (grays) => ({
@@ -8,6 +8,57 @@ const image = (grays) => ({
   data: new Uint8ClampedArray(grays.flatMap((g) => [g, g, g, 255])),
 })
 const values = (img) => Array.from({ length: img.width }, (_, i) => img.data[i * 4])
+
+function gradientImage() {
+  const width = 161
+  const height = 61
+  return {
+    width,
+    height,
+    data: new Uint8ClampedArray(Array.from({ length: width * height }, (_, index) => {
+      const value = Math.round(30 + (index % width) * 195 / (width - 1))
+      return [value, value, value, 255]
+    }).flat()),
+  }
+}
+
+test('local normalization removes a smooth gradient without inventing text', () => {
+  for (const mode of ['dark', 'light']) {
+    const img = gradientImage()
+    normalizeBackgroundPixels(img, mode)
+    expect(img.data.every((value) => value === 255)).toBe(true)
+  }
+})
+
+test('local normalization preserves thin fills and rejects opposite outlines on gradients', () => {
+  for (const mode of ['dark', 'light']) {
+    const img = gradientImage()
+    const fill = mode === 'dark' ? 0 : 255
+    const outline = 255 - fill
+    const put = (column, row, value) => img.data.set([value, value, value, 255], (row * img.width + column) * 4)
+    for (const column of [35, 125]) {
+      for (let row = 20; row <= 40; row++) {
+        put(column - 1, row, outline)
+        put(column, row, fill)
+        put(column + 1, row, outline)
+      }
+      put(column, 10, fill)
+    }
+    normalizeBackgroundPixels(img, mode)
+    for (const column of [35, 125]) {
+      expect(img.data[(30 * img.width + column) * 4]).toBe(0)
+      expect(img.data[(10 * img.width + column) * 4]).toBe(0)
+      expect(img.data[(30 * img.width + column - 1) * 4]).toBe(255)
+      expect(img.data[(30 * img.width + column + 1) * 4]).toBe(255)
+    }
+  }
+})
+
+test('local normalization handles tiny uniform crops without false ink', () => {
+  const img = image([128])
+  normalizeBackgroundPixels(img, 'dark')
+  expect(values(img)).toEqual([255])
+})
 
 test('binarize turns dark text on a light page into black on white', () => {
   const img = image([250, 250, 250, 250, 250, 20])

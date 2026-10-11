@@ -13,7 +13,6 @@
     "prebuild": "node scripts/copy-ocr-assets.mjs"
   },
   "dependencies": {
-    "@tesseract.js-data/eng": "^1.0.0",
     "@tesseract.js-data/jpn": "^1.0.0",
     "@tesseract.js-data/jpn_vert": "^1.0.0",
     "react": "^19.2.8",

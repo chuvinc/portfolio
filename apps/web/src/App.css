@@ -277,13 +277,22 @@ footer {
 }
 
 .inspector {
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+}
+
+.inspector > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.inspector-content {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
   align-items: flex-start;
-  padding: 12px;
-  border: 1px solid var(--accent-border);
-  border-radius: 6px;
+  margin-top: 12px;
 }
 
 .closeup {
@@ -317,11 +326,12 @@ footer {
   align-items: center;
 }
 
-/* Compact: the picture with the result directly under it on the left, the controls on the right
-   (spanning both rows). Expanded: everything stacks in order: picture, controls, result. */
+/* Compact: the picture and result on the left, controls spanning both rows on the right.
+  Expanded: picture, result, then controls. */
 .workspace {
   display: grid;
   grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
+  grid-template-rows: min-content minmax(0, 1fr);
   grid-template-areas:
     'stage side'
     'output side';
@@ -331,10 +341,11 @@ footer {
 
 .workspace.expanded {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
   grid-template-areas:
     'stage'
-    'side'
-    'output';
+    'output'
+    'side';
 }
 
 .workspace .stage {
@@ -376,10 +387,11 @@ footer {
 @media (max-width: 800px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
     grid-template-areas:
       'stage'
-      'side'
-      'output';
+      'output'
+      'side';
   }
 }
 
@@ -394,6 +406,32 @@ footer {
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+.reading-results {
+  min-width: 0;
+}
+
+.reading-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+}
+
+.reading-alternatives {
+  padding-left: 22px;
+  margin: 8px 0;
+}
+
+.reading-alternatives li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.reading-alternatives .hint {
+  display: block;
+  margin-bottom: 6px;
 }
 
 .boxlist-head {

@@ -21,6 +21,7 @@ vi.mock('./layout', () => ({ inferLayout: vi.fn() }))
 vi.mock('./preprocess', () => ({
   contrastImage: vi.fn(async (image, factor) => (factor > 1 ? `${image}+contrast${factor}` : image)),
   isolateInk: vi.fn(async (image, mode) => `${image}+${mode}`),
+  normalizeBackground: vi.fn(async (image, mode) => `${image}+local-${mode}`),
   stretchImage: vi.fn(async (image, factor) => (factor === 1 ? image : `${image}+wide${factor}`)),
 }))
 vi.mock('tesseract.js', () => ({
@@ -74,6 +75,40 @@ const verticalBlock = {
 }
 const horizontalLine = { id: 2, x: 10, y: 10, w: 200, h: 30, glyph: 14, direction: 'horizontal', lines: 1, psm: '7' }
 const read = (region, language = 'jpn') => readRegions(new Blob(['x']), [region], { language }).then(([r]) => r)
+
+test('thorough reading tries all variants even with high initial confidence', async () => {
+  const [result] = await readRegions(new Blob(['x']), [horizontalLine], { language: 'jpn', thorough: true })
+  expect(attempts).toHaveLength(12)
+  expect(result.alternatives.flatMap((alternative) => alternative.methods)).toEqual(
+    expect.arrayContaining(['Original', 'Adjusted contrast', 'Dark fill', 'Light fill', 'Local dark fill', 'Local light fill']),
+  )
+  expect(result.alternatives).toHaveLength(6)
+  expect(result.alternatives.every((alternative) => Number.isFinite(alternative.score))).toBe(true)
+})
+
+test('thorough reading groups identical output and retains all methods', async () => {
+  const { createWorker } = await import('tesseract.js')
+  createWorker.mockImplementationOnce(async () => ({
+    setParameters: vi.fn(),
+    recognize: vi.fn(async () => ({ data: { text: 'same text', confidence: 90 } })),
+    terminate: vi.fn(),
+  }))
+  const [result] = await readRegions(new Blob(['x']), [horizontalLine], { language: 'eng', thorough: true })
+  expect(result.alternatives).toHaveLength(1)
+  expect(result.alternatives[0].methods).toEqual(['Original', 'Adjusted contrast', 'Dark fill', 'Light fill', 'Local dark fill', 'Local light fill'])
+  expect(result.alternatives[0].engineConfidence).toBe(90)
+})
+
+test('local variants use unmodified crops and do not leak into subsequent regions', async () => {
+  const { normalizeBackground } = await import('./preprocess')
+  normalizeBackground.mockClear()
+  const results = await readRegions(new Blob(['x']), [horizontalLine, { ...horizontalLine, id: 3, x: 30 }], { language: 'eng', thorough: true })
+  expect(normalizeBackground.mock.calls).toEqual([
+    ['crop@x=10', 'dark'], ['crop@x=10', 'light'],
+    ['crop@x=30', 'dark'], ['crop@x=30', 'light'],
+  ])
+  expect(results[1].alternatives.find((alternative) => alternative.methods.includes('Original')).text).toBe('[eng:crop@x=30]')
+})
 
 test('vertical blocks are read one column at a time, right to left', async () => {
   const result = await read(verticalBlock)

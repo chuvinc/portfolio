@@ -3,12 +3,16 @@ import OcrTool from './OcrTool'
 import './App.css'
 
 const SKILLS = [
-  'GitHub Actions CI/CD',
-  'Node.js',
+  'JavaScript',
   'React',
+  'Vite',
+  'Node.js',
+  'Fastify',
+  'Tesseract.js / WebAssembly',
+  'Vitest / React Testing Library',
+  'GitHub Actions / GitHub Pages',
   'Docker',
-  'Kubernetes',
-  'Terraform',
+  'nginx',
 ]
 
 function Projects() {
@@ -61,7 +65,7 @@ function App() {
     <>
       <header>
         <h1>Portfolio</h1>
-        <p>Building and shipping software end to end: code, pipelines, containers and infrastructure.</p>
+        <p>A React and Node.js portfolio with private, browser-based Japanese OCR.</p>
       </header>
 
       <main>

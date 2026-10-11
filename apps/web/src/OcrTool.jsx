@@ -48,7 +48,7 @@ function describe({ direction, lines, psm, language }) {
 // unsure of (likely ghost text) are left out unless asked for.
 function regionText(regions, page, language, showLow, glossary) {
   const shown = regions.filter(
-    (r) => r.included && r.text && (showLow || r.confidence >= MIN_CONFIDENCE),
+    (r) => r.included && r.text && (r.acceptedReading || showLow || r.confidence >= MIN_CONFIDENCE),
   )
   const parts = orderRegions(shown, page.height, readsRightToLeft(language.split('+')[0])).map((r) =>
     r.entries ? applyGlossary(r.entries, glossary) : { entries: entriesFromText(r.text), text: r.text, fixed: 0 },
@@ -61,7 +61,7 @@ function regionText(regions, page, language, showLow, glossary) {
 // What a box is doing: 'off' (not read), 'low' (read, but the engine was unsure) or 'on'.
 const boxKind = (r, showLow) => {
   if (!r.included) return 'off'
-  if (r.text !== undefined && !showLow && r.confidence < MIN_CONFIDENCE) return 'low'
+  if (r.text !== undefined && !r.acceptedReading && !showLow && r.confidence < MIN_CONFIDENCE) return 'low'
   return 'on'
 }
 
@@ -264,11 +264,13 @@ function BoxList({ regions, selected, activeId, showLow, pageContrast, onPick, o
 
 // A close-up of one box with its own contrast slider, for text that needs a different setting from
 // the rest of the page (faded caption, outlined sound effect). Leaving it alone uses the page's.
-function BoxInspector({ region, page, imageUrl, brightness, pageContrast, onContrast, onDelete }) {
+function BoxInspector({ region, page, imageUrl, brightness, pageContrast, busy, onContrast, onDelete, onThorough, onUseReading }) {
   const effective = region.contrast ?? pageContrast
   const scale = Math.min(3, 320 / Math.max(region.w, region.h))
   return (
-    <div className="inspector">
+    <details className="inspector" open>
+      <summary>Box #{region.id}</summary>
+      <div className="inspector-content">
       <ContrastFilter id="contrast-box" factor={effective / 100} brightness={brightness} />
       <div
         className="closeup"
@@ -284,7 +286,6 @@ function BoxInspector({ region, page, imageUrl, brightness, pageContrast, onCont
         }}
       />
       <div className="inspector-controls">
-        <strong>Box #{region.id}</strong>
         <label>
           Contrast for this box{' '}
           <input
@@ -293,22 +294,51 @@ function BoxInspector({ region, page, imageUrl, brightness, pageContrast, onCont
             max={300}
             step={10}
             value={effective}
+            disabled={busy}
             onChange={(e) => onContrast(Number(e.target.value))}
             aria-label="Contrast for this box"
           />{' '}
           {effective}%
         </label>
         {region.contrast !== undefined && (
-          <button type="button" onClick={() => onContrast(undefined)}>
+          <button type="button" onClick={() => onContrast(undefined)} disabled={busy}>
             Use the page setting ({pageContrast}%)
           </button>
         )}
         <span className="hint">Changing it means this box is read again.</span>
+        <button type="button" onClick={onThorough} disabled={busy}>
+          Thorough read
+        </button>
+        {region.alternatives && (
+          <div className="reading-results">
+            <strong>Current result</strong>
+            <p className="reading-text">{region.text ?? 'Not read yet'}</p>
+            <strong>Alternative readings</strong>
+            <ol className="reading-alternatives">
+              {region.alternatives.map((alternative, index) => (
+                <li key={alternative.text}>
+                  <span>{alternative.methods.join(' / ')}</span>
+                  <p className="reading-text">{alternative.text || 'No text found'}</p>
+                  <span className="hint">Engine confidence: {Math.round(alternative.engineConfidence)}%</span>
+                  <button
+                    type="button"
+                    aria-label={`Use reading ${index + 1} for box ${region.id}`}
+                    disabled={busy || !alternative.text || region.text === alternative.text}
+                    onClick={() => onUseReading(alternative)}
+                  >
+                    Use this reading
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
         <button type="button" className="danger" onClick={onDelete}>
           Delete this box
         </button>
       </div>
-    </div>
+      </div>
+    </details>
   )
 }
 
@@ -404,9 +434,9 @@ export default function OcrTool() {
   }
 
   // Runs an async step, ignoring its result if the user cleared or restarted meanwhile.
-  const guarded = async (start, work) => {
+  const guarded = async (start, work, preserveEdit = false) => {
     const id = ++run.current
-    setState((s) => ({ ...s, ...start, edit: null, error: null, progress: 0 }))
+    setState((s) => ({ ...s, ...start, edit: preserveEdit ? s.edit : null, error: null, progress: 0 }))
     try {
       const update = await work(id)
       if (run.current === id) setState((s) => ({ ...s, ...update(s) }))
@@ -445,6 +475,31 @@ export default function OcrTool() {
 
   const readPending = () => readNow(state.regions)
 
+  const readThorough = (region) =>
+    guarded({ status: 'starting thorough read' }, async (id) => {
+      const [result] = await readRegions(state.image, [region], { ...options, thorough: true }, progress(id))
+      return (s) => ({
+        status: 'done',
+        progress: 1,
+        regions: s.regions.map((current) => current.id === region.id ? { ...current, alternatives: result.alternatives } : current),
+      })
+    }, true)
+
+  const applyReading = (id, alternative) =>
+    setState((s) => ({
+      ...s,
+      edit: null,
+      regions: s.regions.map((region) => region.id === id ? {
+        ...region,
+        text: alternative.text,
+        entries: alternative.entries,
+        confidence: alternative.confidence,
+        language: alternative.language,
+        acceptedReading: true,
+        included: true,
+      } : region),
+    }))
+
   // Switch every box on and read them all; the low-confidence ones are then hidden automatically.
   const readAll = () => {
     const all = state.regions.map((r) => ({ ...r, included: true }))
@@ -473,13 +528,16 @@ export default function OcrTool() {
     setState((s) => ({ ...s, regions: s.regions.map((r) => (ids.includes(r.id) ? { ...r, included } : r)) }))
 
   // Sets one box's own contrast (undefined = follow the page) and clears what was read from it.
-  const setRegionsContrast = (ids, value) =>
+  const setRegionsContrast = (ids, value) => {
+    run.current += 1
     setState((s) => ({
       ...s,
+      status: '',
       regions: s.regions.map((r) =>
-        ids.includes(r.id) ? { ...r, contrast: value, text: undefined, entries: undefined, confidence: undefined, ink: undefined } : r,
+        ids.includes(r.id) ? { ...r, contrast: value, text: undefined, entries: undefined, confidence: undefined, ink: undefined, alternatives: undefined, acceptedReading: false } : r,
       ),
     }))
+  }
 
   const setAllRegions = (included) =>
     setState((s) => ({ ...s, regions: s.regions.map((r) => ({ ...r, included })) }))
@@ -498,6 +556,7 @@ export default function OcrTool() {
   }
 
   const changeOptions = (patch) => {
+    run.current += 1
     const next = { ...options, ...patch }
     setOptions(next)
     setState((s) => {
@@ -505,7 +564,7 @@ export default function OcrTool() {
       if (!usesRegions(next)) return { ...s, regions: null, status: '' }
       // Read text depends on these settings; boxes stay.
       if ('language' in patch || 'contrast' in patch || 'allowLatin' in patch) {
-        return { ...s, regions: s.regions.map((r) => ({ ...r, text: undefined, entries: undefined, confidence: undefined })), status: '' }
+        return { ...s, regions: s.regions.map((r) => ({ ...r, text: undefined, entries: undefined, confidence: undefined, alternatives: undefined, acceptedReading: false })), status: '' }
       }
       return s
     })
@@ -654,6 +713,9 @@ export default function OcrTool() {
                   imageUrl={state.previewUrl}
                   brightness={state.brightness}
                   pageContrast={options.contrast}
+                  busy={busy}
+                  onThorough={() => readThorough(activeRegion)}
+                  onUseReading={(alternative) => applyReading(activeRegion.id, alternative)}
                   onContrast={(value) => setRegionsContrast([activeRegion.id], value)}
                   onDelete={() => deleteRegions([activeRegion.id])}
                 />

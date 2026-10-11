@@ -307,6 +307,58 @@ async function readFirstBox() {
   return el
 }
 
+test('thorough reading preserves output until a reading is chosen and changes only that box', async () => {
+  localStorage.clear()
+  await findRegionsMode()
+  fireEvent.click(screen.getByText('Read all (hide unsure)'))
+  await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
+  fireEvent.click(screen.getByLabelText('Select box 1').closest('li'))
+  const alternative = {
+    text: 'better text',
+    entries: Array.from('better text', (ch) => ({ ch, conf: 90 })),
+    confidence: 30,
+    engineConfidence: 30,
+    language: 'jpn',
+    methods: ['Dark fill', 'Original'],
+  }
+  readRegions.mockResolvedValueOnce([{ id: 1, alternatives: [alternative] }])
+  fireEvent.click(screen.getByText('Thorough read'))
+  await screen.findByText('Dark fill / Original')
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1')
+  expect(readRegions.mock.calls.at(-1)[1]).toHaveLength(1)
+  expect(readRegions.mock.calls.at(-1)[2].thorough).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Use reading 1 for box 1' }))
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('better text')
+  fireEvent.click(screen.getByLabelText(/Include regions Tesseract was unsure about/))
+  expect(screen.getByLabelText('Extracted text').textContent).toContain('text 2')
+  fireEvent.change(screen.getByLabelText('Contrast for this box'), { target: { value: '200' } })
+  expect(screen.queryByText('Alternative readings')).toBeNull()
+})
+
+test('the box inspector can collapse without losing readings or moving output into it', async () => {
+  await readFirstBox()
+  const inspector = document.querySelector('details.inspector')
+  const summary = screen.getByText('Box #1')
+  expect(inspector.open).toBe(true)
+  fireEvent.click(summary)
+  expect(inspector.open).toBe(false)
+  expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1')
+  expect(inspector.querySelector('[aria-label="Extracted text"]')).toBeNull()
+  fireEvent.click(summary)
+  expect(inspector.open).toBe(true)
+  expect(screen.getByRole('button', { name: 'Thorough read' })).toBeTruthy()
+})
+
+test('thorough alternatives are cleared when OCR options change', async () => {
+  const el = await readFirstBox()
+  clickAt(el, 150, 120)
+  readRegions.mockResolvedValueOnce([{ id: 1, alternatives: [] }])
+  fireEvent.click(screen.getByText('Thorough read'))
+  await screen.findByText('Alternative readings')
+  fireEvent.click(screen.getByLabelText(/Allow English letters and numbers/))
+  expect(screen.queryByText('Alternative readings')).toBeNull()
+})
+
 test('the result can be edited by hand, and reset', async () => {
   await readFirstBox()
   fireEvent.click(screen.getByText('Edit text'))

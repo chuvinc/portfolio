@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import App from './App'
 
 afterEach(() => {
@@ -39,4 +39,16 @@ test('shows an error message when the API fails', async () => {
 
   expect(await screen.findByText(/Couldn't load projects/)).toBeTruthy()
   expect(await screen.findByText('build info unavailable')).toBeTruthy()
+})
+
+test('skills reflect the technologies implemented in this portfolio', async () => {
+  stubFetch({})
+  render(<App />)
+  const skills = within(document.querySelector('#skills'))
+  expect(skills.getByText('Fastify')).toBeTruthy()
+  expect(skills.getByText('Tesseract.js / WebAssembly')).toBeTruthy()
+  expect(skills.getByText('GitHub Actions / GitHub Pages')).toBeTruthy()
+  expect(skills.queryByText('Kubernetes')).toBeNull()
+  expect(skills.queryByText('Terraform')).toBeNull()
+  await screen.findByText('build info unavailable')
 })
