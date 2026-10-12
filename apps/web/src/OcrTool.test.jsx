@@ -4,7 +4,10 @@ import OcrTool from './OcrTool'
 import { findTextRegions, readRegions, recognize } from './ocr'
 
 vi.mock('./imageCleanup/inpaint.js', () => ({
-  inpaintImage: vi.fn(async () => ({ toDataURL: () => 'data:image/png;base64,cleaned' })),
+  inpaintImage: vi.fn(async () => ({
+    getContext: () => ({ fillRect: vi.fn() }),
+    toDataURL: () => 'data:image/png;base64,cleaned',
+  })),
 }))
 
 vi.mock('./ocr', () => ({
@@ -231,6 +234,83 @@ test('mask preview explains empty or outdated masks and Reset Mask rebuilds it',
   }
 })
 
+test('selected boxes can use a chosen solid fill during cleanup', async () => {
+  const maskContext = {
+    fillRect: vi.fn(),
+    getImageData: vi.fn((x, y, width, height) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      width,
+      height,
+    })),
+    putImageData: vi.fn(),
+  }
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(maskContext)
+  const fillRect = vi.fn()
+  const resultContext = { fillRect }
+  const resultCanvas = {
+    getContext: vi.fn(() => resultContext),
+    toDataURL: vi.fn(() => 'data:image/png;base64,cleaned'),
+  }
+  const { inpaintImage } = await import('./imageCleanup/inpaint.js')
+  inpaintImage.mockResolvedValueOnce(resultCanvas)
+  vi.stubGlobal('Image', class {
+    async decode() {}
+  })
+
+  try {
+    await findRegionsMode()
+    fireEvent.click(screen.getByText('All On'))
+    fireEvent.click(screen.getByText('Show Mask'))
+    fireEvent.click(screen.getByText('Box details'))
+    fireEvent.click(screen.getByLabelText('Select box 1'))
+    fireEvent.change(screen.getByLabelText('Solid fill color'), { target: { value: '#eeeeee' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Fill selected boxes' }))
+    expect(screen.getByText(/solid fill #eeeeee/)).toBeTruthy()
+
+    clickMore('Remove Text')
+    await waitFor(() => expect(fillRect).toHaveBeenCalledWith(100, 100, 200, 50))
+    expect(fillRect).toHaveBeenCalledTimes(1)
+    expect(resultContext.fillStyle).toBe('#eeeeee')
+  } finally {
+    getContext.mockRestore()
+    vi.unstubAllGlobals()
+  }
+})
+
+test('solid fill color can be sampled from the original image', async () => {
+  await findRegionsMode()
+  const image = screen.getByAltText('Selected for text extraction')
+  image.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 })
+  Object.defineProperties(image, {
+    clientWidth: { configurable: true, value: 998 },
+    clientHeight: { configurable: true, value: 798 },
+    clientLeft: { configurable: true, value: 1 },
+    clientTop: { configurable: true, value: 1 },
+  })
+  const context = {
+    drawImage: vi.fn(),
+    getImageData: vi.fn(() => ({ data: new Uint8ClampedArray([34, 51, 68, 255]) })),
+  }
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+
+  try {
+    fireEvent.click(screen.getByText('Box details'))
+    fireEvent.click(screen.getByLabelText('Select box 1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Sample image color' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pick solid fill color from image' }), {
+      clientX: 150,
+      clientY: 120,
+    })
+
+    expect(context.getImageData).toHaveBeenCalledWith(149, 119, 1, 1)
+    expect(screen.getByLabelText('Solid fill color').value).toBe('#223344')
+    fireEvent.click(screen.getByRole('button', { name: 'Fill selected boxes' }))
+    expect(screen.getByText(/solid fill #223344/)).toBeTruthy()
+  } finally {
+    getContext.mockRestore()
+  }
+})
+
 test('mask brush size is adjustable while erasing', async () => {
   const context = {
     fillRect: vi.fn(),
@@ -275,14 +355,18 @@ test('replacement text is independent per included box and each box can resize',
   })
 
   try {
+    fireEvent.change(screen.getByLabelText('Contrast'), { target: { value: '200' } })
     clickAt(overlayElement, 150, 120)
     fireEvent.click(screen.getByText('All On'))
     fireEvent.click(screen.getByText('Read All'))
     await waitFor(() => expect(screen.getByText(/^Read \(0\)$/)).toBeTruthy())
 
     fireEvent.click(screen.getByText('Show Mask'))
+    const previewImage = screen.getByAltText('Selected for text extraction')
+    expect(previewImage.style.filter).toBe('url("#contrast-preview")')
     clickMore('Remove Text')
     await screen.findByLabelText('Replacement box')
+    expect(previewImage.style.filter).toBe('')
 
     expect(document.querySelectorAll('.text-layer-preview')).toHaveLength(2)
     expect(screen.getByLabelText('Text alignment').value).toBe('center')
@@ -307,6 +391,9 @@ test('replacement text is independent per included box and each box can resize',
     fireEvent.change(screen.getByLabelText('Replacement box'), { target: { value: '1' } })
     expect(screen.getByLabelText('Replacement text for box 1').value).toBe('text 1')
     expect(screen.getByLabelText('Bold text').checked).toBe(true)
+
+    clickMore('Show Original')
+    expect(previewImage.style.filter).toBe('url("#contrast-preview")')
   } finally {
     getContext.mockRestore()
     vi.unstubAllGlobals()

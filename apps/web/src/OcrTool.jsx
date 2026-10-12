@@ -191,7 +191,7 @@ function ContrastFilter({ id, factor, brightness }) {
 }
 
 // Every box in a list, to pick several and act on them together.
-function BoxList({ regions, selected, activeId, showLow, pageContrast, onPick, onSelectAll, onSelectNone, onActivate, onTurn, onDelete, onContrast }) {
+function BoxList({ regions, selected, activeId, showLow, pageContrast, solidFills, fillColor, samplingSolidColor, onPick, onSelectAll, onSelectNone, onActivate, onTurn, onDelete, onContrast, onSolidFill, onClearSolidFill, onFillColorChange, onSampleColor }) {
   const [bulk, setBulk] = useState(pageContrast)
   const word = { on: 'on', off: 'off', low: 'unsure' }
   return (
@@ -226,6 +226,7 @@ function BoxList({ regions, selected, activeId, showLow, pageContrast, onPick, o
                 <span>
                   #{r.id} · {r.direction} · {word[boxKind(r, showLow)]}
                   {r.confidence !== undefined && ` · ${Math.round(r.confidence)}%`}
+                  {solidFills[r.id] && ` · solid fill ${solidFills[r.id]}`}
                 </span>
               </li>
             ))}
@@ -239,6 +240,27 @@ function BoxList({ regions, selected, activeId, showLow, pageContrast, onPick, o
               </button>
               <button type="button" onClick={() => onTurn(false)}>
                 Turn off
+              </button>
+            </div>
+            <div className="solid-fill-controls">
+              <label>
+                Solid fill color{' '}
+                <input
+                  type="color"
+                  value={fillColor}
+                  onChange={(event) => onFillColorChange(event.target.value)}
+                  aria-label="Solid fill color"
+                />
+              </label>
+              <button type="button" onClick={onSampleColor}>
+                {samplingSolidColor ? 'Cancel color sample' : 'Sample image color'}
+              </button>
+              {samplingSolidColor && <span className="hint" role="status">Click the image to sample its original color.</span>}
+              <button type="button" onClick={() => onSolidFill(fillColor)}>
+                Fill selected boxes
+              </button>
+              <button type="button" onClick={onClearSolidFill}>
+                Use inpainting
               </button>
             </div>
             <label>
@@ -561,7 +583,11 @@ export default function OcrTool() {
   const [cleanupMaskRegionKey, setCleanupMaskRegionKey] = useState(null)
   const cleanupMaskCanvas = useRef(null)
   const cleanupPreviewCanvas = useRef(null)
+  const previewImageRef = useRef(null)
   const [eraseMaskMode, setEraseMaskMode] = useState(false)
+  const [solidFills, setSolidFills] = useState({})
+  const [solidFillColor, setSolidFillColor] = useState('#ffffff')
+  const [samplingSolidColor, setSamplingSolidColor] = useState(false)
   const [brushSize, setBrushSize] = useState(60)
   const [cleanedImageUrl, setCleanedImageUrl] = useState(null)
   const [removingText, setRemovingText] = useState(false)
@@ -729,9 +755,17 @@ export default function OcrTool() {
       await image.decode()
 
       const { inpaintImage } = await import('./imageCleanup/inpaint.js')
-      const resultCanvas = await inpaintImage(image, mask)
-      setCleanedImageUrl(resultCanvas.toDataURL('image/png'))
       const includedRegions = state.regions.filter((region) => region.included)
+      const resultCanvas = await inpaintImage(image, mask)
+      const resultContext = resultCanvas.getContext('2d')
+      if (!resultContext) throw new Error('Could not draw solid fills.')
+      for (const region of includedRegions) {
+        const color = solidFills[region.id]
+        if (!color) continue
+        resultContext.fillStyle = color
+        resultContext.fillRect(region.x, region.y, region.w, region.h)
+      }
+      setCleanedImageUrl(resultCanvas.toDataURL('image/png'))
       const defaults = createTextLayers(includedRegions, state.page)
       setLetteringByRegion((current) => ({ ...defaults, ...current }))
       setState((current) => ({
@@ -749,6 +783,30 @@ export default function OcrTool() {
     } finally {
       setRemovingText(false)
     }
+  }
+
+  const sampleSolidColor = (event) => {
+    const image = previewImageRef.current
+    if (!image?.naturalWidth || !image?.naturalHeight) return
+
+    const rect = image.getBoundingClientRect()
+    const imageX = event.clientX - rect.left - image.clientLeft
+    const imageY = event.clientY - rect.top - image.clientTop
+    if (!image.clientWidth || !image.clientHeight || imageX < 0 || imageY < 0 || imageX >= image.clientWidth || imageY >= image.clientHeight) return
+
+    const x = Math.floor((imageX / image.clientWidth) * image.naturalWidth)
+    const y = Math.floor((imageY / image.clientHeight) * image.naturalHeight)
+    const canvas = document.createElement('canvas')
+    canvas.width = image.naturalWidth
+    canvas.height = image.naturalHeight
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) return
+
+    context.drawImage(image, 0, 0)
+    const [red, green, blue] = context.getImageData(x, y, 1, 1).data
+    const hex = [red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')
+    setSolidFillColor(`#${hex}`)
+    setSamplingSolidColor(false)
   }
 
   const generateCleanupMask = () => {
@@ -800,6 +858,8 @@ export default function OcrTool() {
     cleanupPreviewCanvas.current = null
     cleanupMaskCanvas.current = null
     setEraseMaskMode(false)
+    setSamplingSolidColor(false)
+    setSolidFills({})
     setCleanedImageUrl(null)
     setRemovingText(false)
     setShowCleanedImage(true)
@@ -900,13 +960,15 @@ export default function OcrTool() {
       return () => ({ text, entries: entries ?? null, detected, status: 'done', progress: 1 })
     })
 
-  const findRegions = () =>
-    guarded({ regions: null, status: 'finding text regions' }, async () => {
+  const findRegions = () => {
+    setSolidFills({})
+    return guarded({ regions: null, status: 'finding text regions' }, async () => {
       const { regions, page } = await findTextRegions(state.image, sensitivity, options.contrast)
       nextRegionId.current = regions.length + 1
       const found = regions.map((r, i) => ({ ...r, id: i + 1, included: false }))
       return () => ({ regions: found, page, activeId: null, selected: [], status: '' })
     })
+  }
 
   const readNow = (regions) =>
     guarded({ status: 'starting' }, async (id) => {
@@ -960,13 +1022,17 @@ export default function OcrTool() {
     setState((s) => ({ ...s, activeId: id, regions: s.regions.map((r) => (r.id === id ? { ...r, included: !r.included } : r)) }))
 
   // Removes a box entirely (its text leaves the result too).
-  const deleteRegions = (ids) =>
+  const deleteRegions = (ids) => {
+    setSolidFills((current) => Object.fromEntries(
+      Object.entries(current).filter(([id]) => !ids.includes(Number(id))),
+    ))
     setState((s) => ({
       ...s,
       activeId: ids.includes(s.activeId) ? null : s.activeId,
       selected: s.selected.filter((id) => !ids.includes(id)),
       regions: s.regions.filter((r) => !ids.includes(r.id)),
     }))
+  }
 
   const toggleSelect = (id) =>
     setState((s) => ({ ...s, selected: s.selected.includes(id) ? s.selected.filter((x) => x !== id) : [...s.selected, id] }))
@@ -1026,6 +1092,7 @@ export default function OcrTool() {
   const activeTextLayer = activeLetteringRegion && state.page
     ? letteringByRegion[activeLetteringRegion.id] ?? createTextLayers([activeLetteringRegion], state.page)[activeLetteringRegion.id]
     : null
+  const displayingCleanedImage = Boolean(cleanedImageUrl && showCleanedImage)
   const selectedIds = state.selected.filter((id) => state.regions?.some((r) => r.id === id))
   const includedRegionKey = state.regions?.filter((region) => region.included).map((region) => region.id).join(',') ?? ''
   const cleanupMaskIsStale = hasCleanupMask && cleanupMaskRegionKey !== includedRegionKey
@@ -1093,16 +1160,25 @@ export default function OcrTool() {
             <div className="stage">
               <div className="previewBox">
                 <img
+                  ref={previewImageRef}
                   className="preview"
-                  src={showCleanedImage && cleanedImageUrl ? cleanedImageUrl : state.previewUrl}
+                  src={displayingCleanedImage ? cleanedImageUrl : state.previewUrl}
                   alt="Selected for text extraction"
-                  style={options.contrast > 100 ? { filter: 'url(#contrast-preview)' } : undefined}
+                  style={options.contrast > 100 && !displayingCleanedImage ? { filter: 'url(#contrast-preview)' } : undefined}
                   onLoad={(e) => {
                     const { naturalWidth: width, naturalHeight: height } = e.currentTarget
                     if (width && height) setState((s) => ({ ...s, page: { width, height } }))
                   }}
                   onDoubleClick={() => setExpanded((e) => !e)}
                 />
+                {samplingSolidColor && (
+                  <button
+                    type="button"
+                    className="color-sampler-overlay"
+                    aria-label="Pick solid fill color from image"
+                    onClick={sampleSolidColor}
+                  />
+                )}
                 <ContrastFilter id="contrast-preview" factor={options.contrast / 100} brightness={state.brightness} />
                 {hasCleanupMask && (
                   <canvas
@@ -1491,6 +1567,18 @@ export default function OcrTool() {
                   onTurn={(included) => setIncluded(selectedIds, included)}
                   onDelete={() => deleteRegions(selectedIds)}
                   onContrast={(value) => setRegionsContrast(selectedIds, value)}
+                  solidFills={solidFills}
+                  fillColor={solidFillColor}
+                  samplingSolidColor={samplingSolidColor}
+                  onFillColorChange={setSolidFillColor}
+                  onSampleColor={() => setSamplingSolidColor((current) => !current)}
+                  onSolidFill={(color) => setSolidFills((current) => ({
+                    ...current,
+                    ...Object.fromEntries(selectedIds.map((id) => [id, color])),
+                  }))}
+                  onClearSolidFill={() => setSolidFills((current) => Object.fromEntries(
+                    Object.entries(current).filter(([id]) => !selectedIds.includes(Number(id))),
+                  ))}
                 />
               )}
               <div className="options">
