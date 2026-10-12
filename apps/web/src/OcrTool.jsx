@@ -1264,7 +1264,7 @@ export default function OcrTool() {
                         >
                           {showCleanedImage ? 'Show Original' : 'Show Cleaned'}
                         </button>
-                        <button type="button" onClick={exportCleanedImage}>
+                        <button type="button" onClick={exportCleanedImage} disabled={exporting}>
                           Download
                         </button>
                       </>
