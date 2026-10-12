@@ -345,7 +345,7 @@ function BoxInspector({ region, page, imageUrl, brightness, pageContrast, busy, 
 }
 
 // brush erase mode
-function CleanupMaskBrush({ maskCanvas, previewCanvas, brushSize = 30 }) {
+function CleanupMaskBrush({ maskCanvas, previewCanvas, brushSize = 60 }) {
   const overlayRef = useRef(null)
   const lastPoint = useRef(null)
 
