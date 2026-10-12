@@ -562,6 +562,7 @@ export default function OcrTool() {
   const cleanupMaskCanvas = useRef(null)
   const cleanupPreviewCanvas = useRef(null)
   const [eraseMaskMode, setEraseMaskMode] = useState(false)
+  const [brushSize, setBrushSize] = useState(60)
   const [cleanedImageUrl, setCleanedImageUrl] = useState(null)
   const [removingText, setRemovingText] = useState(false)
   const [showCleanedImage, setShowCleanedImage] = useState(true)
@@ -1115,6 +1116,7 @@ export default function OcrTool() {
                   <CleanupMaskBrush
                     maskCanvas={cleanupMaskCanvas.current}
                     previewCanvas={cleanupPreviewCanvas.current}
+                    brushSize={brushSize}
                   />
                 )}
                 {!eraseMaskMode && !(cleanedImageUrl && showCleanedImage) && state.page && (!busy || state.regions) && (
@@ -1306,6 +1308,21 @@ export default function OcrTool() {
                   </div>
                 </details>
               </div>
+                  {eraseMaskMode && (
+                    <label className="brush-size-control">
+                      <span>Mask brush size</span>
+                      <input
+                        type="range"
+                        min="5"
+                        max="200"
+                        step="5"
+                        value={brushSize}
+                        onChange={(event) => setBrushSize(Number(event.target.value))}
+                        aria-label="Mask brush size"
+                      />
+                      <output>{brushSize}px</output>
+                    </label>
+                  )}
               {cleanedImageUrl && activeLetteringRegion && activeTextLayer && (
                 <section className="text-layer-controls">
                   <h3>Replacement text</h3>

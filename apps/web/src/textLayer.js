@@ -79,7 +79,7 @@ export function drawTextLayer(context, { text, x, y, fontSize, color, maxWidth, 
   context.clip()
   lines.forEach((line, index) => {
     if (outline) {
-      context.fillStyle = oppositeColor(color)
+      context.strokeStyle = oppositeColor(color)
       context.lineWidth = Math.max(1, fontSize * 0.16)
       context.lineJoin = 'round'
       context.strokeText(line, textX, y + index * lineHeight)

@@ -65,7 +65,7 @@ test('center alignment outlines text without changing its size or position', () 
     x: 12,
     y: 24,
     fontSize: 10,
-    color: '#ffffff',
+    color: '#111111',
     maxWidth: 70,
     maxHeight: 30,
     outline: true,
@@ -73,6 +73,7 @@ test('center alignment outlines text without changing its size or position', () 
 
   expect(oppositeColor('#ffffff')).toBe('#000000')
   expect(oppositeColor('#111111')).toBe('#ffffff')
+  expect(canvasContext.strokeStyle).toBe('#ffffff')
   expect(canvasContext.textAlign).toBe('center')
   expect(canvasContext.strokeText).toHaveBeenCalledWith('hello', 47, 24)
   expect(canvasContext.fillText).toHaveBeenCalledWith('hello', 47, 24)

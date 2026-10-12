@@ -107,6 +107,23 @@ footer {
   text-align: center;
 }
 
+.brush-size-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brush-size-control input {
+  flex: 1;
+  min-width: 80px;
+}
+
+.brush-size-control output {
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .previewBox {
   position: relative;
   width: 100%;

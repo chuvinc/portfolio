@@ -231,6 +231,33 @@ test('mask preview explains empty or outdated masks and Reset Mask rebuilds it',
   }
 })
 
+test('mask brush size is adjustable while erasing', async () => {
+  const context = {
+    fillRect: vi.fn(),
+    getImageData: vi.fn((x, y, width, height) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      width,
+      height,
+    })),
+    putImageData: vi.fn(),
+  }
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+
+  try {
+    await findRegionsMode()
+    fireEvent.click(screen.getByText('Show Mask'))
+    fireEvent.click(screen.getByText('Erase Mask'))
+
+    const slider = screen.getByRole('slider', { name: 'Mask brush size' })
+    expect(slider.value).toBe('60')
+    fireEvent.change(slider, { target: { value: '125' } })
+    expect(slider.value).toBe('125')
+    expect(screen.getByText('125px')).toBeTruthy()
+  } finally {
+    getContext.mockRestore()
+  }
+})
+
 test('replacement text is independent per included box and each box can resize', async () => {
   const overlayElement = await findRegionsMode()
   const context = {
