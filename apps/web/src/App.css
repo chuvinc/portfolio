@@ -97,6 +97,16 @@ footer {
   margin: 12px auto 0;
 }
 
+.import-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.import-notice {
+  margin: 0;
+  text-align: center;
+}
+
 .previewBox {
   position: relative;
   width: 100%;

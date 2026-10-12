@@ -548,6 +548,7 @@ function CleanupMaskBrush({ maskCanvas, previewCanvas, brushSize = 30 }) {
 
 export default function OcrTool() {
   const [state, setState] = useState(IDLE)
+  const [pasteNotice, setPasteNotice] = useState('')
   const [options, setOptions] = useState({
     language: LANGUAGES[0].id,
     layout: LAYOUTS[0].id,
@@ -820,6 +821,7 @@ export default function OcrTool() {
 
   const load = (file) => {
     if (!file?.type.startsWith('image/')) return
+    setPasteNotice('')
     clear()
     previewUrl.current = URL.createObjectURL(file)
     setState({ ...IDLE, image: file, previewUrl: previewUrl.current })
@@ -845,6 +847,29 @@ export default function OcrTool() {
     document.addEventListener('paste', onPaste)
     return () => document.removeEventListener('paste', onPaste)
   }, [])
+
+  const pasteImage = async () => {
+    const readClipboard = navigator.clipboard?.read
+    if (!readClipboard) {
+      setPasteNotice('Clipboard image pasting is not available here. Choose a photo instead.')
+      return
+    }
+
+    try {
+      const items = await readClipboard.call(navigator.clipboard)
+      for (const item of items) {
+        const type = item.types.find((candidate) => candidate.startsWith('image/'))
+        if (!type) continue
+        const blob = await item.getType(type)
+        const extension = type.split('/')[1].replace('jpeg', 'jpg')
+        load(new File([blob], `pasted-image.${extension}`, { type }))
+        return
+      }
+      setPasteNotice('No image found on the clipboard. Choose a photo instead.')
+    } catch {
+      setPasteNotice('Could not access the clipboard. Choose a photo instead.')
+    }
+  }
 
   // Adds a line to the glossary (from the click-to-fix panel), skipping ones already there.
   const addGlossaryLine = (line) => {
@@ -1034,7 +1059,7 @@ export default function OcrTool() {
           load(e.dataTransfer.files[0])
         }}
       >
-        Drop an image here, press Ctrl+V to paste one, or click to choose a file
+        Drop an image here or click to choose a file
         <input
           type="file"
           accept="image/*"
@@ -1044,6 +1069,12 @@ export default function OcrTool() {
           }}
         />
       </label>
+      <div className="import-actions">
+        <button type="button" onClick={pasteImage}>
+          Paste image from clipboard
+        </button>
+      </div>
+      {pasteNotice && <p className="status import-notice" role="status">{pasteNotice}</p>}
 
       {state.previewUrl && (
         <>

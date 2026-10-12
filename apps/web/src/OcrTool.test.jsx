@@ -100,6 +100,28 @@ test('pasting an image anywhere on the page loads it', async () => {
   expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
 })
 
+test('the paste button loads an image from the clipboard', async () => {
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      read: vi.fn(async () => [{
+        types: ['image/png'],
+        getType: vi.fn(async () => new Blob(['x'], { type: 'image/png' })),
+      }]),
+    },
+  })
+
+  try {
+    render(<OcrTool />)
+    fireEvent.click(screen.getByRole('button', { name: 'Paste image from clipboard' }))
+    expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
+  } finally {
+    if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
+    else delete navigator.clipboard
+  }
+})
+
 // Maps pixel coordinates 1:1 onto the mocked 1000x800 page.
 function overlay() {
   const el = document.querySelector('.overlay')
