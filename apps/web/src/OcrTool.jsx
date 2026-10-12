@@ -15,7 +15,6 @@ import { entriesFromText } from './postprocess'
 import { brightnessOf } from './preprocess'
 import { orderRegions } from './regions'
 import { createRegionMask } from './imageCleanup/masks.js'
-import { inpaintImage } from './imageCleanup/inpaint.js'
 import { createTextLayers, drawTextLayer, oppositeColor } from './textLayer'
 
 const IDLE = {
@@ -346,7 +345,7 @@ function BoxInspector({ region, page, imageUrl, brightness, pageContrast, busy, 
 }
 
 // brush erase mode
-function CleanupMaskBrush({ maskCanvas, previewCanvas, brushSize = 60 }) {
+function CleanupMaskBrush({ maskCanvas, previewCanvas, brushSize = 30 }) {
   const overlayRef = useRef(null)
   const lastPoint = useRef(null)
 
@@ -727,6 +726,7 @@ export default function OcrTool() {
       image.src = state.previewUrl
       await image.decode()
 
+      const { inpaintImage } = await import('./imageCleanup/inpaint.js')
       const resultCanvas = await inpaintImage(image, mask)
       setCleanedImageUrl(resultCanvas.toDataURL('image/png'))
       const includedRegions = state.regions.filter((region) => region.included)

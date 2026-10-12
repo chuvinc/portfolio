@@ -1,8 +1,6 @@
+import cvPromise from '@techstark/opencv-js'
 
 export async function inpaintImage(image, maskCanvas) {
-  // Load OpenCV only when text removal is requested.
-  // This prevents OpenCV from interfering with Vitest.
-  const { default: cvPromise } = await import('@techstark/opencv-js')
   const opencv = await Promise.resolve(cvPromise)
 
   if (!opencv.Mat || !opencv.inpaint) {
