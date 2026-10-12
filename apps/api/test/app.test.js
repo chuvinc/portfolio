@@ -20,10 +20,13 @@ test('GET /api/projects returns a non-empty list', async () => {
   assert.equal(portfolio.url, 'https://github.com/chuvinc/portfolio')
   assert.ok(portfolio.tags.includes('vite'))
   assert.ok(portfolio.tags.includes('node.js'))
-  assert.equal(ocr.name, 'Image text reader')
+  assert.equal(ocr.name, 'Image Text Reader')
   assert.match(ocr.summary, /Browser-based OCR with selectable text regions/)
+  assert.match(ocr.summary, /per-region replacement lettering.*composed PNG export/)
   assert.ok(ocr.tags.includes('opencv.js'))
   assert.ok(ocr.tags.includes('canvas-api'))
+  assert.ok(ocr.tags.includes('custom-font'))
+  assert.ok(ocr.tags.includes('png-export'))
 })
 
 test('buildInfo reads from env and has defaults', () => {

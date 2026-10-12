@@ -8,9 +8,9 @@ export const projects = [
   },
   {
     id: 'ocr',
-    name: 'Image text reader',
-    summary: 'Browser-based OCR with selectable text regions and OpenCV.js text removal.',
-    tags: ['react', 'tesseract.js', 'webassembly', 'opencv.js', 'canvas-api', 'browser-based'],
+    name: 'Image Text Reader',
+    summary: 'Browser-based OCR with selectable text regions, OpenCV.js text removal, per-region replacement lettering, and composed PNG export.',
+    tags: ['react', 'tesseract.js', 'webassembly', 'opencv.js', 'canvas-api', 'browser-based', 'custom-font', 'png-export'],
     url: '#ocr',
   },
 ]

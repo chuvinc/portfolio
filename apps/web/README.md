@@ -46,4 +46,11 @@ whole-image OCR, use `Extract text` in `More`. Thorough read offers preprocessin
 alternatives for difficult text, and glossary corrections apply to extracted
 output. Engine confidence is not a guarantee of character accuracy.
 
+After removing text, each included region has its own replacement-text layer.
+Read the boxes first to prefill their OCR results, then select a region by
+clicking its box on the cleaned image or choosing it in the `Box` control. Edit
+its text, position, width, height, alignment, weight, color, and optional
+opposite-color outline. `Download` exports the cleaned image with all replacement
+text as a PNG, using the bundled CC Wild Words font.
+
 The React Compiler is not enabled. Tests use Vitest and React Testing Library.

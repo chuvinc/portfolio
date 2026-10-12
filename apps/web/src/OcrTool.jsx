@@ -16,6 +16,7 @@ import { brightnessOf } from './preprocess'
 import { orderRegions } from './regions'
 import { createRegionMask } from './imageCleanup/masks.js'
 import { inpaintImage } from './imageCleanup/inpaint.js'
+import { createTextLayers, drawTextLayer, oppositeColor } from './textLayer'
 
 const IDLE = {
   image: null,
@@ -564,6 +565,9 @@ export default function OcrTool() {
   const [cleanedImageUrl, setCleanedImageUrl] = useState(null)
   const [removingText, setRemovingText] = useState(false)
   const [showCleanedImage, setShowCleanedImage] = useState(true)
+  const [letteringByRegion, setLetteringByRegion] = useState({})
+  const [exporting, setExporting] = useState(false)
+  const letteringDrag = useRef(null)
   
   const [expanded, setExpanded] = useState(false) // false: picture on the left, controls beside it
   const [editing, setEditing] = useState(false) // the text box for rewriting the result by hand is open
@@ -599,16 +603,117 @@ export default function OcrTool() {
     target.putImageData(pixels, 0, 0)
   }
 
-  const exportCleanedImage = () => {
+  const exportCleanedImage = async () => {
     if (!cleanedImageUrl) return
 
-    const link = document.createElement('a')
-    link.href = cleanedImageUrl
-    link.download = 'manga-cleaned.png'
+    setExporting(true)
+    try {
+      const image = new Image()
+      image.src = cleanedImageUrl
+      await image.decode()
 
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+      const canvas = document.createElement('canvas')
+      canvas.width = image.naturalWidth
+      canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Could not create image canvas.')
+
+      context.drawImage(image, 0, 0)
+      const includedRegions = state.regions?.filter((region) => region.included) ?? []
+      const defaultLayers = state.page ? createTextLayers(includedRegions, state.page) : {}
+      const textLayers = { ...defaultLayers, ...letteringByRegion }
+      await Promise.all(includedRegions.map((region) => {
+        const layer = textLayers[region.id]
+        return layer?.text ? document.fonts?.load(`${layer.fontSize}px "CC Wild Words"`) : undefined
+      }))
+
+      for (const region of includedRegions) {
+        const layer = textLayers[region.id]
+        if (!layer?.text) continue
+        drawTextLayer(context, {
+          text: layer.text,
+          x: layer.x * canvas.width,
+          y: layer.y * canvas.height,
+          fontSize: layer.fontSize,
+          color: layer.color,
+          maxWidth: canvas.width * layer.width,
+          maxHeight: canvas.height * layer.height,
+          align: layer.align,
+          outline: layer.outline,
+          bold: layer.bold,
+        })
+      }
+
+      const link = document.createElement('a')
+      link.href = canvas.toDataURL('image/png')
+      link.download = 'manga-lettered.png'
+
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (error) {
+      console.error('Image export failed:', error)
+      alert(`Image export failed: ${error.message}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const updateTextLayer = (id, patch) =>
+    setLetteringByRegion((current) => {
+      const layer = { ...current[id], ...patch }
+      layer.x = Math.min(layer.x, 1 - layer.width)
+      layer.y = Math.min(layer.y, 1 - layer.height)
+      return { ...current, [id]: layer }
+    })
+
+  const startTextLayerDrag = (event, regionId, mode = 'move') => {
+    const region = state.regions?.find((item) => item.id === regionId)
+    const layer = letteringByRegion[regionId] ?? (region && state.page
+      ? createTextLayers([{ ...region, included: true }], state.page)[regionId]
+      : null)
+    if (!layer) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const preview = mode === 'resize'
+      ? event.currentTarget.parentElement.parentElement
+      : event.currentTarget.parentElement
+    const bounds = preview.getBoundingClientRect()
+    letteringDrag.current = {
+      mode,
+      regionId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      containerWidth: bounds.width,
+      containerHeight: bounds.height,
+      x: layer.x,
+      y: layer.y,
+      width: layer.width,
+      height: layer.height,
+    }
+    setState((current) => ({ ...current, activeId: regionId }))
+  }
+
+  const moveTextLayer = (event) => {
+    const drag = letteringDrag.current
+    if (!drag || !drag.containerWidth || !drag.containerHeight) return
+    const deltaX = (event.clientX - drag.pointerX) / drag.containerWidth
+    const deltaY = (event.clientY - drag.pointerY) / drag.containerHeight
+
+    if (drag.mode === 'resize') {
+      updateTextLayer(drag.regionId, {
+        width: Math.min(1 - drag.x, Math.max(0.05, drag.width + deltaX)),
+        height: Math.min(1 - drag.y, Math.max(0.05, drag.height + deltaY)),
+      })
+      return
+    }
+
+    updateTextLayer(drag.regionId, {
+      x: Math.min(1 - drag.width, Math.max(0, drag.x + deltaX)),
+      y: Math.min(1 - drag.height, Math.max(0, drag.y + deltaY)),
+    })
   }
 
   const removeText = async () => {
@@ -624,6 +729,15 @@ export default function OcrTool() {
 
       const resultCanvas = await inpaintImage(image, mask)
       setCleanedImageUrl(resultCanvas.toDataURL('image/png'))
+      const includedRegions = state.regions.filter((region) => region.included)
+      const defaults = createTextLayers(includedRegions, state.page)
+      setLetteringByRegion((current) => ({ ...defaults, ...current }))
+      setState((current) => ({
+        ...current,
+        activeId: includedRegions.some((region) => region.id === current.activeId)
+          ? current.activeId
+          : includedRegions[0]?.id ?? null,
+      }))
       setShowCleanedImage(true)
       setShowCleanupMask(false)
       setEraseMaskMode(false)
@@ -687,6 +801,9 @@ export default function OcrTool() {
     setCleanedImageUrl(null)
     setRemovingText(false)
     setShowCleanedImage(true)
+    setLetteringByRegion({})
+    setExporting(false)
+    letteringDrag.current = null
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
     previewUrl.current = null
     setState(IDLE)
@@ -878,6 +995,11 @@ export default function OcrTool() {
 
   const regionMode = usesRegions(options)
   const activeRegion = state.regions?.find((r) => r.id === state.activeId)
+  const letterableRegions = state.regions?.filter((region) => region.included) ?? []
+  const activeLetteringRegion = letterableRegions.find((region) => region.id === state.activeId) ?? letterableRegions[0]
+  const activeTextLayer = activeLetteringRegion && state.page
+    ? letteringByRegion[activeLetteringRegion.id] ?? createTextLayers([activeLetteringRegion], state.page)[activeLetteringRegion.id]
+    : null
   const selectedIds = state.selected.filter((id) => state.regions?.some((r) => r.id === id))
   const includedRegionKey = state.regions?.filter((region) => region.included).map((region) => region.id).join(',') ?? ''
   const cleanupMaskIsStale = hasCleanupMask && cleanupMaskRegionKey !== includedRegionKey
@@ -964,7 +1086,7 @@ export default function OcrTool() {
                     previewCanvas={cleanupPreviewCanvas.current}
                   />
                 )}
-                {!eraseMaskMode && state.page && (!busy || state.regions) && (
+                {!eraseMaskMode && !(cleanedImageUrl && showCleanedImage) && state.page && (!busy || state.regions) && (
                   <RegionOverlay
                     regions={state.regions ?? []}
                     page={state.page}
@@ -977,6 +1099,74 @@ export default function OcrTool() {
                     onExpand={() => setExpanded((e) => !e)}
                   />
                 )}
+                {cleanedImageUrl && showCleanedImage && !showCleanupMask && !eraseMaskMode && state.page && letterableRegions.map((region) => (
+                  <div
+                    key={`select-${region.id}`}
+                    className={`text-region-select-area${region.id === activeLetteringRegion?.id ? ' active' : ''}`}
+                    style={{
+                      left: `${(region.x / state.page.width) * 100}%`,
+                      top: `${(region.y / state.page.height) * 100}%`,
+                      width: `${(region.w / state.page.width) * 100}%`,
+                      height: `${(region.h / state.page.height) * 100}%`,
+                    }}
+                    aria-label={`Select replacement box ${region.id}`}
+                    role="button"
+                    tabIndex={0}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setState((current) => ({ ...current, activeId: region.id }))
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setState((current) => ({ ...current, activeId: region.id }))
+                      }
+                    }}
+                  />
+                ))}
+                {cleanedImageUrl && showCleanedImage && !showCleanupMask && !eraseMaskMode && letterableRegions.map((region) => {
+                  const layer = letteringByRegion[region.id] ?? (state.page
+                    ? createTextLayers([region], state.page)[region.id]
+                    : null)
+                  if (!layer?.text) return null
+                  const active = region.id === activeLetteringRegion?.id
+                  return (
+                    <div
+                      key={region.id}
+                      data-region-id={region.id}
+                      className={`text-layer-preview${active ? ' active' : ''}`}
+                      style={{
+                        left: `${layer.x * 100}%`,
+                        top: `${layer.y * 100}%`,
+                        width: `${layer.width * 100}%`,
+                        height: `${layer.height * 100}%`,
+                        fontSize: `${(layer.fontSize / state.page.width) * 100}cqw`,
+                        fontWeight: layer.bold ? 700 : 400,
+                        fontSynthesis: layer.bold ? 'weight' : 'none',
+                        color: layer.color,
+                        textAlign: layer.align,
+                        WebkitTextStroke: layer.outline
+                          ? `0.16em ${oppositeColor(layer.color)}`
+                          : '0 transparent',
+                        paintOrder: 'stroke fill',
+                      }}
+                      onPointerDown={(event) => startTextLayerDrag(event, region.id)}
+                      onPointerMove={moveTextLayer}
+                      onPointerUp={() => { letteringDrag.current = null }}
+                      onPointerCancel={() => { letteringDrag.current = null }}
+                    >
+                      {layer.text}
+                      {active && (
+                        <span
+                          className="text-layer-resize"
+                          aria-hidden="true"
+                          onPointerDown={(event) => startTextLayerDrag(event, region.id, 'resize')}
+                        />
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
             <div className="sidebar">
@@ -1085,6 +1275,125 @@ export default function OcrTool() {
                   </div>
                 </details>
               </div>
+              {cleanedImageUrl && activeLetteringRegion && activeTextLayer && (
+                <section className="text-layer-controls">
+                  <h3>Replacement text</h3>
+                  <label>
+                    Box
+                    <select
+                      value={activeLetteringRegion.id}
+                      onChange={(event) => setState((current) => ({ ...current, activeId: Number(event.target.value) }))}
+                      aria-label="Replacement box"
+                    >
+                      {letterableRegions.map((region) => (
+                        <option key={region.id} value={region.id}>Box #{region.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-layer-text">
+                    Text
+                    <textarea
+                      rows={5}
+                      value={activeTextLayer.text}
+                      onChange={(event) => updateTextLayer(activeLetteringRegion.id, { text: event.target.value })}
+                      aria-label={`Replacement text for box ${activeLetteringRegion.id}`}
+                    />
+                  </label>
+                  <label className="text-layer-font">
+                    Font <span>CC Wild Words</span>
+                  </label>
+                  <label>
+                    Alignment
+                    <select
+                      value={activeTextLayer.align}
+                      onChange={(event) => updateTextLayer(activeLetteringRegion.id, { align: event.target.value })}
+                      aria-label="Text alignment"
+                    >
+                      <option value="left">Left</option>
+                      <option value="center">Center</option>
+                      <option value="right">Right</option>
+                    </select>
+                  </label>
+                  <label className="text-layer-toggle">
+                    <input
+                      type="checkbox"
+                      checked={activeTextLayer.bold}
+                      onChange={(event) => updateTextLayer(activeLetteringRegion.id, { bold: event.target.checked })}
+                      aria-label="Bold text"
+                    />
+                    Bold text
+                  </label>
+                  <label className="text-layer-toggle">
+                    <input
+                      type="checkbox"
+                      checked={activeTextLayer.outline}
+                      onChange={(event) => updateTextLayer(activeLetteringRegion.id, { outline: event.target.checked })}
+                      aria-label="Outline text with opposite color"
+                    />
+                    Outline text with opposite color
+                  </label>
+                  <label>
+                    Width
+                    <input
+                      type="range"
+                      min={5}
+                      max={100}
+                      step={1}
+                      value={Math.round(activeTextLayer.width * 100)}
+                      onChange={(event) => {
+                        const width = Number(event.target.value) / 100
+                        updateTextLayer(activeLetteringRegion.id, {
+                          width,
+                          x: Math.min(activeTextLayer.x, 1 - width),
+                        })
+                      }}
+                      aria-label="Text box width"
+                    />
+                    {Math.round(activeTextLayer.width * 100)}%
+                  </label>
+                  <label>
+                    Height
+                    <input
+                      type="range"
+                      min={5}
+                      max={100}
+                      step={1}
+                      value={Math.round(activeTextLayer.height * 100)}
+                      onChange={(event) => {
+                        const height = Number(event.target.value) / 100
+                        updateTextLayer(activeLetteringRegion.id, {
+                          height,
+                          y: Math.min(activeTextLayer.y, 1 - height),
+                        })
+                      }}
+                      aria-label="Text box height"
+                    />
+                    {Math.round(activeTextLayer.height * 100)}%
+                  </label>
+                  <label>
+                    Size
+                    <input
+                      type="range"
+                      min={12}
+                      max={Math.max(12, Math.round(state.page.width * 0.25))}
+                      step={2}
+                      value={activeTextLayer.fontSize}
+                      onChange={(event) => updateTextLayer(activeLetteringRegion.id, { fontSize: Number(event.target.value) })}
+                      aria-label="Text size"
+                    />
+                    {activeTextLayer.fontSize}px
+                  </label>
+                  <label>
+                    Color
+                    <input
+                      type="color"
+                      value={activeTextLayer.color}
+                      onChange={(event) => updateTextLayer(activeLetteringRegion.id, { color: event.target.value })}
+                      aria-label="Text color"
+                    />
+                  </label>
+                </section>
+              )}
               {busy && (
                 <progress value={state.progress} max="1" aria-label={state.status}>
                   {state.status}

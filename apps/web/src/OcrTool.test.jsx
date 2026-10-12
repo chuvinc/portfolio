@@ -3,6 +3,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import OcrTool from './OcrTool'
 import { findTextRegions, readRegions, recognize } from './ocr'
 
+vi.mock('./imageCleanup/inpaint.js', () => ({
+  inpaintImage: vi.fn(async () => ({ toDataURL: () => 'data:image/png;base64,cleaned' })),
+}))
+
 vi.mock('./ocr', () => ({
   LAYOUTS: [
     { id: 'auto', label: 'Auto-detect' },
@@ -202,6 +206,61 @@ test('mask preview explains empty or outdated masks and Reset Mask rebuilds it',
     expect(fillRect).toHaveBeenCalledWith(100, 100, 200, 50)
   } finally {
     getContext.mockRestore()
+  }
+})
+
+test('replacement text is independent per included box and each box can resize', async () => {
+  const overlayElement = await findRegionsMode()
+  const context = {
+    fillRect: vi.fn(),
+    getImageData: vi.fn((x, y, width, height) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      width,
+      height,
+    })),
+    putImageData: vi.fn(),
+  }
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+  vi.stubGlobal('Image', class {
+    async decode() {}
+  })
+
+  try {
+    clickAt(overlayElement, 150, 120)
+    fireEvent.click(screen.getByText('All On'))
+    fireEvent.click(screen.getByText('Read All'))
+    await waitFor(() => expect(screen.getByText(/^Read \(0\)$/)).toBeTruthy())
+
+    fireEvent.click(screen.getByText('Show Mask'))
+    clickMore('Remove Text')
+    await screen.findByLabelText('Replacement box')
+
+    expect(document.querySelectorAll('.text-layer-preview')).toHaveLength(2)
+    expect(screen.getByLabelText('Text alignment').value).toBe('center')
+    fireEvent.click(screen.getByRole('button', { name: 'Select replacement box 2' }))
+    expect(screen.getByLabelText('Replacement box').value).toBe('2')
+    expect(screen.getByLabelText('Bold text').checked).toBe(true)
+    const boxTwoText = screen.getByLabelText('Replacement text for box 2')
+    expect(boxTwoText.value).toBe('text 2')
+    fireEvent.change(boxTwoText, { target: { value: 'translated two' } })
+    fireEvent.change(screen.getByLabelText('Text alignment'), { target: { value: 'left' } })
+    fireEvent.click(screen.getByLabelText('Outline text with opposite color'))
+    fireEvent.change(screen.getByLabelText('Text box width'), { target: { value: '50' } })
+    fireEvent.change(screen.getByLabelText('Text box height'), { target: { value: '25' } })
+
+    const boxTwoPreview = document.querySelector('[data-region-id="2"]')
+    expect(boxTwoPreview.textContent).toContain('translated two')
+    expect(boxTwoPreview.style.width).toBe('50%')
+    expect(boxTwoPreview.style.height).toBe('25%')
+    expect(boxTwoPreview.style.textAlign).toBe('left')
+    expect(screen.getByLabelText('Outline text with opposite color').checked).toBe(true)
+
+    fireEvent.change(screen.getByLabelText('Replacement box'), { target: { value: '1' } })
+    expect(screen.getByLabelText('Replacement text for box 1').value).toBe('text 1')
+    expect(screen.getByLabelText('Bold text').checked).toBe(true)
+  } finally {
+    getContext.mockRestore()
+    vi.unstubAllGlobals()
   }
 })
 

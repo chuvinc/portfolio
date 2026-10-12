@@ -101,6 +101,7 @@ footer {
   position: relative;
   width: 100%;
   line-height: 0;
+  container-type: inline-size;
 }
 
 .preview {
@@ -546,4 +547,106 @@ footer {
   border-radius: 50%;
   box-sizing: border-box;
   pointer-events: none;
+}
+
+.text-layer-preview {
+  position: absolute;
+  z-index: 4;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: 'CC Wild Words', sans-serif;
+  font-weight: 400;
+  line-height: 1.2;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  outline: 1px dashed transparent;
+}
+
+.text-layer-preview.active {
+  outline-color: rgba(20, 20, 20, 0.65);
+}
+
+.text-layer-preview:active {
+  cursor: grabbing;
+}
+
+.text-region-select-area {
+  position: absolute;
+  z-index: 3;
+  box-sizing: content-box;
+  margin: -8px;
+  padding: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.text-region-select-area:hover,
+.text-region-select-area.active {
+  border-color: rgba(20, 20, 20, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.text-layer-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid #111;
+  background: #fff;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.text-layer-resize::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #111;
+  border-bottom: 2px solid #111;
+}
+
+.text-layer-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.text-layer-controls h3 {
+  margin: 0;
+  color: var(--text-h);
+  font-size: 18px;
+}
+
+.text-layer-controls > label:not(.text-layer-text) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.text-layer-controls .text-layer-text {
+  display: grid;
+  gap: 4px;
+}
+
+.text-layer-controls .text-layer-toggle {
+  justify-content: flex-start;
+}
+
+.text-layer-controls input[type='range'] {
+  flex: 1;
+  min-width: 80px;
+}
+
+.text-layer-controls input[type='color'] {
+  width: 40px;
+  height: 32px;
+  padding: 2px;
 }

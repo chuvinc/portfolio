@@ -8,9 +8,12 @@ the application itself alongside the technologies used to build, test, and deplo
 - A React frontend with project listings and build information.
 - OCR powered by Tesseract.js and WebAssembly, with manual text boxes,
   confidence-aware region selection, mask-based text removal, preprocessing
-  alternatives for difficult backgrounds, and glossary corrections. OCR runs in
-  the browser; the selected image remains in the page while the tool is in use
-  and can be removed with Clear Image.
+  alternatives for difficult backgrounds, glossary corrections, and per-region
+  replacement lettering. Add centered text using the bundled CC Wild Words font,
+  adjust its alignment, weight, outline, size, color, and box dimensions, then
+  export the cleaned page with lettering as a PNG. OCR runs in the browser; the
+  selected image remains in the page while the tool is in use and can be removed
+  with Clear Image.
 - A small Node.js/Fastify API for project data and build metadata.
 - Automated tests and GitHub Actions checks, plus GitHub Pages deployment with
   static snapshots of the API responses.
