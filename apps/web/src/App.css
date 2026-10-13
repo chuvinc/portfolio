@@ -628,6 +628,11 @@ footer {
   outline-color: rgba(20, 20, 20, 0.65);
 }
 
+.text-layer-preview.manual.empty {
+  outline: 1px dashed var(--accent);
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .text-layer-preview:active {
   cursor: grabbing;
 }

@@ -14,7 +14,7 @@ import {
 import { entriesFromText } from './postprocess'
 import { brightnessOf } from './preprocess'
 import { orderRegions } from './regions'
-import { createRegionMask } from './imageCleanup/masks.js'
+import { applySolidFills, createRegionMask } from './imageCleanup/masks.js'
 import { createTextLayers, drawTextLayer, oppositeColor } from './textLayer'
 
 const IDLE = {
@@ -593,6 +593,8 @@ export default function OcrTool() {
   const [removingText, setRemovingText] = useState(false)
   const [showCleanedImage, setShowCleanedImage] = useState(true)
   const [letteringByRegion, setLetteringByRegion] = useState({})
+  const [manualTextRegions, setManualTextRegions] = useState([])
+  const nextManualTextId = useRef(-1)
   const [exporting, setExporting] = useState(false)
   const letteringDrag = useRef(null)
   
@@ -646,7 +648,10 @@ export default function OcrTool() {
       if (!context) throw new Error('Could not create image canvas.')
 
       context.drawImage(image, 0, 0)
-      const includedRegions = state.regions?.filter((region) => region.included) ?? []
+      const includedRegions = [
+        ...(state.regions?.filter((region) => region.included) ?? []),
+        ...manualTextRegions,
+      ]
       const defaultLayers = state.page ? createTextLayers(includedRegions, state.page) : {}
       const textLayers = { ...defaultLayers, ...letteringByRegion }
       await Promise.all(includedRegions.map((region) => {
@@ -695,7 +700,7 @@ export default function OcrTool() {
     })
 
   const startTextLayerDrag = (event, regionId, mode = 'move') => {
-    const region = state.regions?.find((item) => item.id === regionId)
+    const region = letterableRegions.find((item) => item.id === regionId)
     const layer = letteringByRegion[regionId] ?? (region && state.page
       ? createTextLayers([{ ...region, included: true }], state.page)[regionId]
       : null)
@@ -757,14 +762,7 @@ export default function OcrTool() {
       const { inpaintImage } = await import('./imageCleanup/inpaint.js')
       const includedRegions = state.regions.filter((region) => region.included)
       const resultCanvas = await inpaintImage(image, mask)
-      const resultContext = resultCanvas.getContext('2d')
-      if (!resultContext) throw new Error('Could not draw solid fills.')
-      for (const region of includedRegions) {
-        const color = solidFills[region.id]
-        if (!color) continue
-        resultContext.fillStyle = color
-        resultContext.fillRect(region.x, region.y, region.w, region.h)
-      }
+      applySolidFills(resultCanvas, mask, includedRegions, solidFills)
       setCleanedImageUrl(resultCanvas.toDataURL('image/png'))
       const defaults = createTextLayers(includedRegions, state.page)
       setLetteringByRegion((current) => ({ ...defaults, ...current }))
@@ -864,6 +862,8 @@ export default function OcrTool() {
     setRemovingText(false)
     setShowCleanedImage(true)
     setLetteringByRegion({})
+    setManualTextRegions([])
+    nextManualTextId.current = -1
     setExporting(false)
     letteringDrag.current = null
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
@@ -962,6 +962,8 @@ export default function OcrTool() {
 
   const findRegions = () => {
     setSolidFills({})
+    setManualTextRegions([])
+    nextManualTextId.current = -1
     return guarded({ regions: null, status: 'finding text regions' }, async () => {
       const { regions, page } = await findTextRegions(state.image, sensitivity, options.contrast)
       nextRegionId.current = regions.length + 1
@@ -1087,11 +1089,35 @@ export default function OcrTool() {
 
   const regionMode = usesRegions(options)
   const activeRegion = state.regions?.find((r) => r.id === state.activeId)
-  const letterableRegions = state.regions?.filter((region) => region.included) ?? []
+  const letterableRegions = [
+    ...(state.regions?.filter((region) => region.included) ?? []),
+    ...manualTextRegions,
+  ]
   const activeLetteringRegion = letterableRegions.find((region) => region.id === state.activeId) ?? letterableRegions[0]
   const activeTextLayer = activeLetteringRegion && state.page
     ? letteringByRegion[activeLetteringRegion.id] ?? createTextLayers([activeLetteringRegion], state.page)[activeLetteringRegion.id]
     : null
+  const addManualTextBox = () => {
+    if (!state.page) return
+    const width = Math.min(state.page.width, Math.max(80, Math.round(state.page.width * 0.25)))
+    const height = Math.min(state.page.height, Math.max(50, Math.round(state.page.height * 0.12)))
+    const region = {
+      id: nextManualTextId.current--,
+      x: Math.round((state.page.width - width) / 2),
+      y: Math.round((state.page.height - height) / 2),
+      w: width,
+      h: height,
+      text: '',
+      included: true,
+      manualText: true,
+    }
+    setManualTextRegions((current) => [...current, region])
+    setLetteringByRegion((current) => ({
+      ...current,
+      [region.id]: createTextLayers([region], state.page)[region.id],
+    }))
+    setState((current) => ({ ...current, activeId: region.id }))
+  }
   const displayingCleanedImage = Boolean(cleanedImageUrl && showCleanedImage)
   const selectedIds = state.selected.filter((id) => state.regions?.some((r) => r.id === id))
   const includedRegionKey = state.regions?.filter((region) => region.included).map((region) => region.id).join(',') ?? ''
@@ -1238,13 +1264,13 @@ export default function OcrTool() {
                   const layer = letteringByRegion[region.id] ?? (state.page
                     ? createTextLayers([region], state.page)[region.id]
                     : null)
-                  if (!layer?.text) return null
+                  if (!layer?.text && !region.manualText) return null
                   const active = region.id === activeLetteringRegion?.id
                   return (
                     <div
                       key={region.id}
                       data-region-id={region.id}
-                      className={`text-layer-preview${active ? ' active' : ''}`}
+                      className={`text-layer-preview${active ? ' active' : ''}${region.manualText ? ' manual' : ''}${region.manualText && !layer.text ? ' empty' : ''}`}
                       style={{
                         left: `${layer.x * 100}%`,
                         top: `${layer.y * 100}%`,
@@ -1265,7 +1291,7 @@ export default function OcrTool() {
                       onPointerUp={() => { letteringDrag.current = null }}
                       onPointerCancel={() => { letteringDrag.current = null }}
                     >
-                      {layer.text}
+                      {layer.text || (region.manualText ? 'Type here' : '')}
                       {active && (
                         <span
                           className="text-layer-resize"
@@ -1366,6 +1392,9 @@ export default function OcrTool() {
                     )}
                     {cleanedImageUrl && (
                       <>
+                        <button type="button" onClick={addManualTextBox} disabled={!state.page}>
+                          Add text box
+                        </button>
                         <button
                           type="button"
                           onClick={() => setShowCleanedImage((current) => !current)}
@@ -1410,7 +1439,9 @@ export default function OcrTool() {
                       aria-label="Replacement box"
                     >
                       {letterableRegions.map((region) => (
-                        <option key={region.id} value={region.id}>Box #{region.id}</option>
+                        <option key={region.id} value={region.id}>
+                          {region.manualText ? `Manual text ${Math.abs(region.id)}` : `Box #${region.id}`}
+                        </option>
                       ))}
                     </select>
                   </label>
@@ -1420,9 +1451,27 @@ export default function OcrTool() {
                       rows={5}
                       value={activeTextLayer.text}
                       onChange={(event) => updateTextLayer(activeLetteringRegion.id, { text: event.target.value })}
-                      aria-label={`Replacement text for box ${activeLetteringRegion.id}`}
+                      aria-label={`Replacement text for ${activeLetteringRegion.manualText ? `manual box ${Math.abs(activeLetteringRegion.id)}` : `box ${activeLetteringRegion.id}`}`}
                     />
                   </label>
+                  {activeLetteringRegion.manualText && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = activeLetteringRegion.id
+                        const next = letterableRegions.find((region) => region.id !== id)
+                        setManualTextRegions((current) => current.filter((region) => region.id !== id))
+                        setLetteringByRegion((current) => {
+                          return Object.fromEntries(
+                            Object.entries(current).filter(([key]) => Number(key) !== id),
+                          )
+                        })
+                        setState((current) => ({ ...current, activeId: next?.id ?? null }))
+                      }}
+                    >
+                      Delete text box
+                    </button>
+                  )}
                   <label className="text-layer-font">
                     Font <span>CC Wild Words</span>
                   </label>

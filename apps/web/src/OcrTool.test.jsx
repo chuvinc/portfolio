@@ -5,7 +5,13 @@ import { findTextRegions, readRegions, recognize } from './ocr'
 
 vi.mock('./imageCleanup/inpaint.js', () => ({
   inpaintImage: vi.fn(async () => ({
-    getContext: () => ({ fillRect: vi.fn() }),
+    width: 1000,
+    height: 800,
+    getContext: () => ({
+      getImageData: (x, y, width, height) => ({ data: new Uint8ClampedArray(width * height * 4) }),
+      putImageData: vi.fn(),
+      fillRect: vi.fn(),
+    }),
     toDataURL: () => 'data:image/png;base64,cleaned',
   })),
 }))
@@ -238,16 +244,22 @@ test('selected boxes can use a chosen solid fill during cleanup', async () => {
   const maskContext = {
     fillRect: vi.fn(),
     getImageData: vi.fn((x, y, width, height) => ({
-      data: new Uint8ClampedArray(width * height * 4),
+      data: new Uint8ClampedArray(width * height * 4).map((value, index) => index % 4 === 0 ? 255 : value),
       width,
       height,
     })),
     putImageData: vi.fn(),
   }
   const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(maskContext)
-  const fillRect = vi.fn()
-  const resultContext = { fillRect }
+  const resultPixels = new Uint8ClampedArray(1000 * 800 * 4)
+  const putImageData = vi.fn()
+  const resultContext = {
+    getImageData: vi.fn(() => ({ data: resultPixels })),
+    putImageData,
+  }
   const resultCanvas = {
+    width: 1000,
+    height: 800,
     getContext: vi.fn(() => resultContext),
     toDataURL: vi.fn(() => 'data:image/png;base64,cleaned'),
   }
@@ -268,9 +280,11 @@ test('selected boxes can use a chosen solid fill during cleanup', async () => {
     expect(screen.getByText(/solid fill #eeeeee/)).toBeTruthy()
 
     clickMore('Remove Text')
-    await waitFor(() => expect(fillRect).toHaveBeenCalledWith(100, 100, 200, 50))
-    expect(fillRect).toHaveBeenCalledTimes(1)
-    expect(resultContext.fillStyle).toBe('#eeeeee')
+  await waitFor(() => expect(putImageData).toHaveBeenCalled())
+  const maskedPixel = (100 * 1000 + 100) * 4
+  const unmaskedOutsideBoxPixel = (100 * 1000 + 400) * 4
+  expect([...resultPixels.slice(maskedPixel, maskedPixel + 4)]).toEqual([238, 238, 238, 255])
+  expect([...resultPixels.slice(unmaskedOutsideBoxPixel, unmaskedOutsideBoxPixel + 4)]).toEqual([0, 0, 0, 0])
   } finally {
     getContext.mockRestore()
     vi.unstubAllGlobals()
@@ -394,6 +408,52 @@ test('replacement text is independent per included box and each box can resize',
 
     clickMore('Show Original')
     expect(previewImage.style.filter).toBe('url("#contrast-preview")')
+  } finally {
+    getContext.mockRestore()
+    vi.unstubAllGlobals()
+  }
+})
+
+test('a manual text box can be added, edited, and removed after cleanup', async () => {
+  const context = {
+    fillRect: vi.fn(),
+    getImageData: vi.fn((x, y, width, height) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      width,
+      height,
+    })),
+    putImageData: vi.fn(),
+  }
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+  const { inpaintImage } = await import('./imageCleanup/inpaint.js')
+  inpaintImage.mockResolvedValueOnce({
+    width: 1000,
+    height: 800,
+    getContext: () => ({
+      getImageData: (x, y, width, height) => ({ data: new Uint8ClampedArray(width * height * 4) }),
+      putImageData: vi.fn(),
+      fillRect: vi.fn(),
+    }),
+    toDataURL: () => 'data:image/png;base64,cleaned',
+  })
+  vi.stubGlobal('Image', class {
+    async decode() {}
+  })
+
+  try {
+    await findRegionsMode()
+    fireEvent.click(screen.getByText('All On'))
+    fireEvent.click(screen.getByText('Show Mask'))
+    clickMore('Remove Text')
+    await screen.findByLabelText('Replacement box')
+
+    clickMore('Add text box')
+    const manualText = screen.getByLabelText('Replacement text for manual box 1')
+    fireEvent.change(manualText, { target: { value: 'Missed dialogue' } })
+    expect(document.querySelector('[data-region-id="-1"]').textContent).toContain('Missed dialogue')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete text box' }))
+    expect(screen.queryByLabelText('Replacement text for manual box 1')).toBeNull()
   } finally {
     getContext.mockRestore()
     vi.unstubAllGlobals()
