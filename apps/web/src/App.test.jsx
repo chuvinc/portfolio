@@ -28,6 +28,8 @@ test('renders projects and build info from the API', async () => {
 
   render(<App />)
 
+  expect(screen.getByRole('heading', { name: 'Image Text Studio' })).toBeTruthy()
+  expect(screen.getByText(/browser-based OCR, image cleanup, and lettering/)).toBeTruthy()
   expect(await screen.findByText('Demo project')).toBeTruthy()
   expect(await screen.findByText('abcdef1')).toBeTruthy()
 })

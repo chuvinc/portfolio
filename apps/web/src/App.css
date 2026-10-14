@@ -102,11 +102,6 @@ footer {
   justify-content: center;
 }
 
-.import-notice {
-  margin: 0;
-  text-align: center;
-}
-
 .brush-size-control {
   display: flex;
   align-items: center;

@@ -71,7 +71,7 @@ function App() {
     <>
       <header>
         <h1>Portfolio</h1>
-        <p>A React and Node.js portfolio with a browser-based image text reader.</p>
+        <p>A React and Node.js portfolio featuring browser-based OCR, image cleanup, and lettering.</p>
       </header>
 
       <main>
@@ -85,7 +85,7 @@ function App() {
         </section>
 
         <section id="ocr">
-          <h2>Read text from an image</h2>
+          <h2>Image Text Studio</h2>
           <OcrTool />
         </section>
 

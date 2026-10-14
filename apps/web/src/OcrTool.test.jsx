@@ -81,6 +81,99 @@ test('ignores non-image files', () => {
   expect(screen.queryByText('Extract text')).toBeNull()
 })
 
+test.each([true, false])('offers textless export only when the upload needs cleanup: clean upload %s', async (cleanUpload) => {
+  const context = {
+    drawImage: vi.fn(),
+    fillRect: vi.fn(),
+    getImageData: vi.fn((x, y, width, height) => ({ data: new Uint8ClampedArray(width * height * 4) })),
+    putImageData: vi.fn(),
+    measureText: vi.fn((text) => ({ width: text.length * 5 })),
+    save: vi.fn(),
+    beginPath: vi.fn(),
+    rect: vi.fn(),
+    clip: vi.fn(),
+    fillText: vi.fn(),
+    restore: vi.fn(),
+  }
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+  const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,export')
+  const downloads = []
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () {
+    downloads.push(this.download)
+  })
+  const { inpaintImage } = await import('./imageCleanup/inpaint.js')
+  const processingMocks = [findTextRegions, readRegions, recognize, inpaintImage]
+  vi.stubGlobal('Image', class {
+    naturalWidth = 1000
+    naturalHeight = 800
+    async decode() {}
+  })
+
+  try {
+    if (cleanUpload) {
+      const initialCalls = processingMocks.map((mock) => mock.mock.calls.length)
+      render(<OcrTool />)
+      fireEvent.click(screen.getByLabelText('Clean image (text boxes only)'))
+      pick()
+      const image = await screen.findByAltText('Selected for text extraction')
+      Object.defineProperties(image, {
+        naturalWidth: { value: 1000 },
+        naturalHeight: { value: 800 },
+      })
+      fireEvent.load(image)
+      expect(screen.queryByText('Extract text')).toBeNull()
+      expect(screen.queryByLabelText(/Text layout/)).toBeNull()
+      expect(screen.queryByLabelText('Contrast')).toBeNull()
+      expect(screen.queryByLabelText('Glossary')).toBeNull()
+      expect(processingMocks.map((mock) => mock.mock.calls.length)).toEqual(initialCalls)
+    } else {
+      await findRegionsMode()
+      fireEvent.click(screen.getByText('All On'))
+      fireEvent.click(screen.getByText('Read All'))
+      await waitFor(() => expect(screen.getByLabelText('Extracted text').textContent).toBe('text 1'))
+      fireEvent.click(screen.getByText('Show Mask'))
+      clickMore('Remove Text')
+      await screen.findByLabelText('Replacement box')
+    }
+    const initialCalls = processingMocks.map((mock) => mock.mock.calls.length)
+    clickMore('Add text box')
+    fireEvent.change(screen.getByLabelText('Replacement text for manual box 1'), { target: { value: 'New dialogue' } })
+    expect(document.querySelector('[data-region-id="-1"]').textContent).toContain('New dialogue')
+
+    clickMore('Download with text')
+    await waitFor(() => expect(downloads).toEqual(['manga-lettered.png']))
+    expect(context.fillText).toHaveBeenCalledWith('New dialogue', expect.any(Number), expect.any(Number))
+    if (!cleanUpload) expect(context.fillText).toHaveBeenCalledWith('text 1', expect.any(Number), expect.any(Number))
+    if (cleanUpload) {
+      expect(screen.queryByRole('button', { name: 'Download Textless' })).toBeNull()
+      expect(context.drawImage).toHaveBeenCalledTimes(1)
+    } else {
+      context.fillText.mockClear()
+      clickMore('Download Textless')
+      await waitFor(() => expect(downloads).toEqual(['manga-lettered.png', 'manga-cleaned.png']))
+      expect(context.fillText).not.toHaveBeenCalled()
+      expect(context.drawImage).toHaveBeenCalledTimes(2)
+    }
+    expect(processingMocks.map((mock) => mock.mock.calls.length)).toEqual(initialCalls)
+
+    clickMore('Clear Image')
+    expect(screen.queryByLabelText('Replacement text for manual box 1')).toBeNull()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake')
+    if (cleanUpload) {
+      fireEvent.click(screen.getByLabelText('Clean image (text boxes only)'))
+      pick()
+      expect(screen.getByText('Extract text')).toBeTruthy()
+      expect(screen.getByLabelText('Glossary')).toBeTruthy()
+      expect(screen.queryByText('Download Textless')).toBeNull()
+    }
+  } finally {
+    getContext.mockRestore()
+    toDataURL.mockRestore()
+    click.mockRestore()
+    vi.unstubAllGlobals()
+  }
+})
+
 test('explains where image processing happens and how to remove the image', () => {
   render(<OcrTool />)
   expect(screen.getByText(/OCR runs in your browser.*stays in this tab while you work.*Clear Image to remove it/i)).toBeTruthy()
@@ -99,36 +192,23 @@ test('passes the chosen layout and contrast to OCR, with Japanese as the languag
   )
 })
 
-test('pasting an image anywhere on the page loads it', async () => {
+test('clipboard image importing is unavailable and paste events are not intercepted', () => {
   render(<OcrTool />)
+  expect(screen.queryByRole('button', { name: 'Paste image from clipboard' })).toBeNull()
   const file = new File(['x'], 'clip.png', { type: 'image/png' })
   const event = new Event('paste', { bubbles: true, cancelable: true })
   event.clipboardData = { files: [file] }
   document.body.dispatchEvent(event)
 
-  expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
+  expect(screen.queryByAltText('Selected for text extraction')).toBeNull()
+  expect(event.defaultPrevented).toBe(false)
 })
 
-test('the paste button loads an image from the clipboard', async () => {
-  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: {
-      read: vi.fn(async () => [{
-        types: ['image/png'],
-        getType: vi.fn(async () => new Blob(['x'], { type: 'image/png' })),
-      }]),
-    },
-  })
-
-  try {
-    render(<OcrTool />)
-    fireEvent.click(screen.getByRole('button', { name: 'Paste image from clipboard' }))
-    expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
-  } finally {
-    if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)
-    else delete navigator.clipboard
-  }
+test('dropping an image still loads it', async () => {
+  render(<OcrTool />)
+  const file = new File(['x'], 'drop.png', { type: 'image/png' })
+  fireEvent.drop(document.querySelector('.drop'), { dataTransfer: { files: [file] } })
+  expect(await screen.findByAltText('Selected for text extraction')).toBeTruthy()
 })
 
 // Maps pixel coordinates 1:1 onto the mocked 1000x800 page.

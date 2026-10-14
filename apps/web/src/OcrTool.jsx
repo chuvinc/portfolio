@@ -20,6 +20,7 @@ import { createTextLayers, drawTextLayer, oppositeColor } from './textLayer'
 const IDLE = {
   image: null,
   previewUrl: null,
+  cleanUpload: false,
   text: '',
   entries: null, // whole-image reads: characters with confidence, for the glossary
   detected: null,
@@ -570,7 +571,7 @@ function CleanupMaskBrush({ maskCanvas, previewCanvas, brushSize = 60 }) {
 
 export default function OcrTool() {
   const [state, setState] = useState(IDLE)
-  const [pasteNotice, setPasteNotice] = useState('')
+  const [cleanUpload, setCleanUpload] = useState(false)
   const [options, setOptions] = useState({
     language: LANGUAGES[0].id,
     layout: LAYOUTS[0].id,
@@ -632,7 +633,7 @@ export default function OcrTool() {
     target.putImageData(pixels, 0, 0)
   }
 
-  const exportCleanedImage = async () => {
+  const exportCleanedImage = async (withText) => {
     if (!cleanedImageUrl) return
 
     setExporting(true)
@@ -648,10 +649,10 @@ export default function OcrTool() {
       if (!context) throw new Error('Could not create image canvas.')
 
       context.drawImage(image, 0, 0)
-      const includedRegions = [
+      const includedRegions = withText ? [
         ...(state.regions?.filter((region) => region.included) ?? []),
         ...manualTextRegions,
-      ]
+      ] : []
       const defaultLayers = state.page ? createTextLayers(includedRegions, state.page) : {}
       const textLayers = { ...defaultLayers, ...letteringByRegion }
       await Promise.all(includedRegions.map((region) => {
@@ -678,7 +679,7 @@ export default function OcrTool() {
 
       const link = document.createElement('a')
       link.href = canvas.toDataURL('image/png')
-      link.download = 'manga-lettered.png'
+      link.download = withText ? 'manga-lettered.png' : 'manga-cleaned.png'
 
       document.body.appendChild(link)
       link.click()
@@ -882,54 +883,17 @@ export default function OcrTool() {
 
   const load = (file) => {
     if (!file?.type.startsWith('image/')) return
-    setPasteNotice('')
     clear()
     previewUrl.current = URL.createObjectURL(file)
-    setState({ ...IDLE, image: file, previewUrl: previewUrl.current })
+    setState({ ...IDLE, image: file, previewUrl: previewUrl.current, cleanUpload })
+    if (cleanUpload) {
+      setCleanedImageUrl(previewUrl.current)
+      return
+    }
     const id = run.current
     brightnessOf(file)
       .then((brightness) => run.current === id && setState((s) => ({ ...s, brightness })))
       .catch(() => {}) // the preview just pivots on mid-gray if the picture can't be measured
-  }
-
-  // Listen on the whole page so Ctrl+V works without clicking into the drop box
-  // (clicking it opens the file picker). The ref keeps the listener on the latest `load`.
-  const loadRef = useRef(load)
-  useEffect(() => {
-    loadRef.current = load
-  })
-  useEffect(() => {
-    const onPaste = (e) => {
-      const file = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'))
-      if (!file) return
-      e.preventDefault()
-      loadRef.current(file)
-    }
-    document.addEventListener('paste', onPaste)
-    return () => document.removeEventListener('paste', onPaste)
-  }, [])
-
-  const pasteImage = async () => {
-    const readClipboard = navigator.clipboard?.read
-    if (!readClipboard) {
-      setPasteNotice('Clipboard image pasting is not available here. Choose a photo instead.')
-      return
-    }
-
-    try {
-      const items = await readClipboard.call(navigator.clipboard)
-      for (const item of items) {
-        const type = item.types.find((candidate) => candidate.startsWith('image/'))
-        if (!type) continue
-        const blob = await item.getType(type)
-        const extension = type.split('/')[1].replace('jpeg', 'jpg')
-        load(new File([blob], `pasted-image.${extension}`, { type }))
-        return
-      }
-      setPasteNotice('No image found on the clipboard. Choose a photo instead.')
-    } catch {
-      setPasteNotice('Could not access the clipboard. Choose a photo instead.')
-    }
   }
 
   // Adds a line to the glossary (from the click-to-fix panel), skipping ones already there.
@@ -1087,7 +1051,7 @@ export default function OcrTool() {
     })
   }
 
-  const regionMode = usesRegions(options)
+  const regionMode = !state.cleanUpload && usesRegions(options)
   const activeRegion = state.regions?.find((r) => r.id === state.activeId)
   const letterableRegions = [
     ...(state.regions?.filter((region) => region.included) ?? []),
@@ -1145,6 +1109,14 @@ export default function OcrTool() {
         remove it.
       </p>
 
+      <label className="import-actions">
+        <input
+          type="checkbox"
+          checked={cleanUpload}
+          onChange={(event) => setCleanUpload(event.target.checked)}
+        />{' '}
+        Clean image (text boxes only)
+      </label>
       <label
         className="drop"
         onDragOver={(e) => e.preventDefault()}
@@ -1163,13 +1135,6 @@ export default function OcrTool() {
           }}
         />
       </label>
-      <div className="import-actions">
-        <button type="button" onClick={pasteImage}>
-          Paste image from clipboard
-        </button>
-      </div>
-      {pasteNotice && <p className="status import-notice" role="status">{pasteNotice}</p>}
-
       {state.previewUrl && (
         <>
           <div className="viewbar">
@@ -1359,7 +1324,7 @@ export default function OcrTool() {
                 >
                   <summary>More ▾</summary>
                   <div className="more-actions">
-                    {!regionMode && (
+                    {!state.cleanUpload && !regionMode && (
                       <button type="button" onClick={extract} disabled={busy}>
                         Extract text
                       </button>
@@ -1385,7 +1350,7 @@ export default function OcrTool() {
                         </button>
                       </>
                     )}
-                    {regionMode && (
+                    {!state.cleanUpload && regionMode && (
                       <button type="button" onClick={findRegions} disabled={busy}>
                         Detect Again
                       </button>
@@ -1395,16 +1360,23 @@ export default function OcrTool() {
                         <button type="button" onClick={addManualTextBox} disabled={!state.page}>
                           Add text box
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowCleanedImage((current) => !current)}
-                          aria-pressed={showCleanedImage}
-                        >
-                          {showCleanedImage ? 'Show Original' : 'Show Cleaned'}
+                        {!state.cleanUpload && (
+                          <button
+                            type="button"
+                            onClick={() => setShowCleanedImage((current) => !current)}
+                            aria-pressed={showCleanedImage}
+                          >
+                            {showCleanedImage ? 'Show Original' : 'Show Cleaned'}
+                          </button>
+                        )}
+                        <button type="button" onClick={() => exportCleanedImage(true)} disabled={exporting}>
+                          Download with text
                         </button>
-                        <button type="button" onClick={exportCleanedImage} disabled={exporting}>
-                          Download
-                        </button>
+                        {!state.cleanUpload && (
+                          <button type="button" onClick={() => exportCleanedImage(false)} disabled={exporting}>
+                            Download Textless
+                          </button>
+                        )}
                       </>
                     )}
                     <button type="button" onClick={clear}>
@@ -1630,7 +1602,7 @@ export default function OcrTool() {
                   ))}
                 />
               )}
-              <div className="options">
+              {!state.cleanUpload && <div className="options">
                 <label>
                   Language{' '}
                   <select
@@ -1699,7 +1671,7 @@ export default function OcrTool() {
                   />{' '}
                   Allow English letters and numbers
                 </label>
-              </div>
+              </div>}
             </div>
             <div className="output">
               {hasOutput && (
@@ -1776,7 +1748,7 @@ export default function OcrTool() {
               )}
             </div>
           </div>
-          <details className="glossary">
+          {!state.cleanUpload && <details className="glossary">
             <summary>Glossary and corrections{glossaryText ? ' (in use)' : ''}</summary>
             <p className="status">
               One entry per line. A word or name you expect fixes near-misses: if the text is one
@@ -1798,7 +1770,7 @@ export default function OcrTool() {
                 </button>
               </div>
             )}
-          </details>
+          </details>}
         </>
       )}
 
